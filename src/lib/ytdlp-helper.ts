@@ -1,9 +1,10 @@
 import path from 'path';
 import fs from 'fs';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 
 const execPromise = promisify(exec);
+export const execFilePromise = promisify(execFile);
 
 async function canExecute(binaryPath: string): Promise<boolean> {
   try {
@@ -63,21 +64,23 @@ export async function getFfmpegLocationArg(): Promise<string> {
   return '';
 }
 
-export async function getExtraYtDlpFlags(playerClients = 'tv_embedded,web_creator,ios'): Promise<string> {
-  const flags: string[] = [
+// Argumentlarni massiv sifatida qaytaramiz — shell quoting muammolarini bartaraf etamiz.
+// execFile() ishlatilganda bu massiv to'g'ridan-to'g'ri uzatiladi (shell orqali emas).
+export async function getExtraYtDlpArgs(playerClients = 'tv_embedded,web_creator,ios'): Promise<string[]> {
+  const args: string[] = [
     '--no-check-certificates',
     '--no-warnings',
     '--geo-bypass',
     '--age-limit', '99',
     '--sleep-interval', '1',
     '--max-sleep-interval', '3',
-    '--user-agent', "'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'",
-    `--extractor-args`, `"'youtube:player_client=${playerClients};skip=webpage,hls'"`
+    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    '--extractor-args', `youtube:player_client=${playerClients};skip=webpage,hls`,
   ];
 
-  const ffmpegLocationArg = await getFfmpegLocationArg();
-  if (ffmpegLocationArg) {
-    flags.push(ffmpegLocationArg);
+  const ffmpegPath = await getFfmpegPath();
+  if (ffmpegPath) {
+    args.push('--ffmpeg-location', ffmpegPath);
   }
 
   const cookiesEnv = process.env.YOUTUBE_COOKIES || (process.env.YOUTUBE_COOKIES_BASE64 ? Buffer.from(process.env.YOUTUBE_COOKIES_BASE64, 'base64').toString('utf-8') : '');
@@ -93,13 +96,19 @@ export async function getExtraYtDlpFlags(playerClients = 'tv_embedded,web_creato
     const cookiesPath = path.join(binDir, 'cookies.txt');
     try {
       fs.writeFileSync(cookiesPath, cookiesEnv.trim(), 'utf-8');
-      flags.push(`--cookies`, cookiesPath);
+      args.push('--cookies', cookiesPath);
     } catch (err) {
       console.error('Failed to write cookies.txt:', err);
     }
   }
 
-  return flags.join(' ');
+  return args;
+}
+
+// Eski kod bilan muvofiqlash uchun — string sifatida qaytaradi (faqat log/debug uchun).
+export async function getExtraYtDlpFlags(playerClients = 'tv_embedded,web_creator,ios'): Promise<string> {
+  const args = await getExtraYtDlpArgs(playerClients);
+  return args.join(' ');
 }
 
 

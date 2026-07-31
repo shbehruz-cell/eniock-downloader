@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { db } from '@/lib/firebase';
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection } from 'firebase/firestore';
-import { ensureYtDlpBinary, getExtraYtDlpFlags } from '@/lib/ytdlp-helper';
+import { ensureYtDlpBinary, getExtraYtDlpArgs, execFilePromise } from '@/lib/ytdlp-helper';
 
 // Bu route build vaqtida static prerender qilinmasligi kerak
 export const dynamic = 'force-dynamic';
@@ -595,19 +595,17 @@ export async function POST(request: NextRequest) {
           // 2. YouTube bo'lmasa yoki RapidAPI ishlamasa, yt-dlp urinadi
           if (!success) {
             const ytDlpPath = await ensureYtDlpBinary();
-            const primaryFlags = await getExtraYtDlpFlags('android,tv_embedded,ios');
-            const cmd = `"${ytDlpPath}" ${primaryFlags} --dump-json "${text}"`;
 
             let stdoutData = '';
             try {
-              const { stdout } = await execPromise(cmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
+              // 1-urinish: android client (eng ko'p formatlar)
+              const args1 = await getExtraYtDlpArgs('android,tv_embedded,ios');
+              const { stdout } = await execFilePromise(ytDlpPath, [...args1, '--dump-json', text], { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
               stdoutData = stdout;
             } catch (e1: any) {
-              const f2 = await getExtraYtDlpFlags('tv_embedded,web_creator,ios');
-              const { stdout } = await execPromise(
-                `"${ytDlpPath}" ${f2} --dump-json "${text}"`,
-                { maxBuffer: 10 * 1024 * 1024, timeout: 60000 }
-              );
+              // 2-urinish: tv_embedded client
+              const args2 = await getExtraYtDlpArgs('tv_embedded,web_creator,ios');
+              const { stdout } = await execFilePromise(ytDlpPath, [...args2, '--dump-json', text], { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
               stdoutData = stdout;
             }
 

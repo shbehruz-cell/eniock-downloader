@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { ensureYtDlpBinary, getExtraYtDlpFlags } from '@/lib/ytdlp-helper';
+import { ensureYtDlpBinary, getExtraYtDlpArgs, execFilePromise } from '@/lib/ytdlp-helper';
 
 const execPromise = promisify(exec);
 
@@ -287,21 +287,16 @@ export async function POST(request: NextRequest) {
     try {
       const ytDlpPath = await ensureYtDlpBinary();
       // android client — eng ko'p va eng yuqori sifatli formatlarni qaytaradi
-      const primaryFlags = await getExtraYtDlpFlags('android,tv_embedded,ios');
-      const cmd = `"${ytDlpPath}" ${primaryFlags} --dump-json "${sanitizedUrl}"`;
-
       let stdoutData = '';
       try {
-        const { stdout } = await execPromise(cmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
+        const args1 = await getExtraYtDlpArgs('android,tv_embedded,ios');
+        const { stdout } = await execFilePromise(ytDlpPath, [...args1, '--dump-json', sanitizedUrl], { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
         stdoutData = stdout;
       } catch (e1: any) {
         console.warn('android client failed:', e1.message);
-        const f2 = await getExtraYtDlpFlags('tv_embedded,web_creator,ios');
         try {
-          const { stdout } = await execPromise(
-            `"${ytDlpPath}" ${f2} --dump-json "${sanitizedUrl}"`,
-            { maxBuffer: 10 * 1024 * 1024, timeout: 60000 }
-          );
+          const args2 = await getExtraYtDlpArgs('tv_embedded,web_creator,ios');
+          const { stdout } = await execFilePromise(ytDlpPath, [...args2, '--dump-json', sanitizedUrl], { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
           stdoutData = stdout;
         } catch (e2: any) {
           console.warn('tv_embedded failed:', e2.message);
