@@ -71,7 +71,8 @@ export async function getExtraYtDlpFlags(playerClients = 'tv_embedded,web_creato
     '--age-limit', '99',
     '--sleep-interval', '1',
     '--max-sleep-interval', '3',
-    `--extractor-args`, `youtube:player_client=${playerClients}`
+    '--user-agent', '"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"',
+    `--extractor-args`, `youtube:player_client=${playerClients};skip=webpage,hls`
   ];
 
   const ffmpegLocationArg = await getFfmpegLocationArg();
@@ -106,45 +107,8 @@ export async function ensureYtDlpBinary(): Promise<string> {
   const isWindows = process.platform === 'win32';
   const isMac = process.platform === 'darwin';
 
-  // 1. Direct system PATH check
-  try {
-    const { stdout } = await execPromise('yt-dlp --version', { timeout: 5000 });
-    if (stdout && stdout.trim().length > 0) {
-      console.log('Using system yt-dlp from PATH');
-      return 'yt-dlp';
-    }
-  } catch {}
-
-  try {
-    const checkCmd = isWindows ? 'where yt-dlp' : 'command -v yt-dlp || which yt-dlp';
-    const { stdout } = await execPromise(checkCmd, { timeout: 5000 });
-    const systemPath = stdout.trim().split(/\r?\n/)[0]?.trim();
-    if (systemPath && fs.existsSync(systemPath) && await canExecute(systemPath)) {
-      console.log(`Using system yt-dlp at: ${systemPath}`);
-      return systemPath;
-    }
-  } catch {}
-
-  // 2. Common Linux & Nix system paths search
-  if (!isWindows) {
-    const commonPaths = [
-      '/usr/bin/yt-dlp',
-      '/usr/local/bin/yt-dlp',
-      '/run/current-system/sw/bin/yt-dlp',
-      '/root/.nix-profile/bin/yt-dlp',
-      '/nix/var/nix/profiles/default/bin/yt-dlp',
-      '/home/railway/.nix-profile/bin/yt-dlp',
-    ];
-    for (const p of commonPaths) {
-      if (fs.existsSync(p) && await canExecute(p)) {
-        console.log(`Found working yt-dlp at: ${p}`);
-        return p;
-      }
-    }
-  }
-
-  // 3. Fallback: Standalone binary download
-  // CRITICAL: On Linux, use yt-dlp_linux (standalone PyInstaller executable with bundled Python)
+  // Tizimdagi eski yt-dlp ni ishlatmasdan, har doim eng yangi GitHub versiyasini ishlatishni majburlaymiz.
+  // Bu YouTube bot-blokirovkasidan qochish uchun eng muhim qadamdir.
   const binaryName = isWindows ? 'yt-dlp.exe' : (isMac ? 'yt-dlp_macos' : 'yt-dlp_linux');
 
   const isReadOnlyFs = !!process.env.VERCEL || !!process.env.RAILWAY_ENVIRONMENT || !isWindows;
