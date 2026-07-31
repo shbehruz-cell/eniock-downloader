@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { ensureYtDlpBinary } from '@/lib/ytdlp-helper';
 
 const execPromise = promisify(exec);
 
@@ -55,31 +56,7 @@ function detectPlatform(url: string): string {
   return 'general';
 }
 
-async function ensureYtDlpBinary(): Promise<string> {
-  const binDir = path.join(process.cwd(), 'bin');
-  if (!fs.existsSync(binDir)) {
-    fs.mkdirSync(binDir, { recursive: true });
-  }
 
-  const binaryPath = path.join(binDir, 'yt-dlp.exe');
-  if (fs.existsSync(binaryPath)) {
-    return binaryPath;
-  }
-
-  console.log('Downloading yt-dlp.exe binary to local bin folder...');
-  const downloadUrl = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe';
-  
-  const response = await fetch(downloadUrl);
-  if (!response.ok) {
-    throw new Error('yt-dlp binar faylini GitHub releases-dan yuklab olib bo\'lmadi');
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  fs.writeFileSync(binaryPath, buffer);
-  
-  return binaryPath;
-}
 
 export async function POST(request: NextRequest) {
   try {

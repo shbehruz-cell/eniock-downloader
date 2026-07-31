@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { spawn } from 'child_process';
-import path from 'path';
+import { ensureYtDlpBinary } from '@/lib/ytdlp-helper';
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,8 +12,7 @@ export async function GET(request: NextRequest) {
 
     // 1. Agar adaptive stream format so'ralgan bo'lsa (masalan YouTube 1080p), yt-dlp yordamida audio+video birlashtirib stream qilamiz
     if (formatId && videoUrl) {
-      const binDir = path.join(process.cwd(), 'bin');
-      const ytDlpPath = path.join(binDir, 'yt-dlp.exe');
+      const ytDlpPath = await ensureYtDlpBinary();
       
       const args = [
         '-f', `${formatId}+bestaudio/best`,
