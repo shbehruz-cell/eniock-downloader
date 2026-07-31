@@ -1,10 +1,6 @@
-# Nixpacks configuration for Railway.app to symlink python3 to python and install FFmpeg
-[variables]
-PATH = "/root/.local/bin:$PATH"
-
+# Nixpacks configuration for Railway.app to bypass python checks during build
 [phases.setup]
 nixPkgs = ['nodejs', 'python3', 'ffmpeg']
-cmds = [
-  'mkdir -p /root/.local/bin',
-  'ln -sf $(which python3) /root/.local/bin/python'
-]
+
+[phases.install]
+cmds = ['npm install --ignore-scripts']
