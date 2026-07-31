@@ -83,10 +83,14 @@ function getQualityLabel(height: number): string | null {
 // ── RapidAPI YouTube fetch helper for Telegram Bot ──────────────────────────
 async function fetchYouTubeViaRapidAPI(videoUrl: string): Promise<any> {
   const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
-  if (!RAPIDAPI_KEY) return null;
+  if (!RAPIDAPI_KEY) {
+    throw new Error('Serverda RAPIDAPI_KEY sozlamasi kiritilmagan! Iltimos, Railway Variables bo\'limiga kirib RAPIDAPI_KEY ni qo\'shing.');
+  }
 
   const match = videoUrl.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
-  if (!match) return null;
+  if (!match) {
+    throw new Error('Noto\'g\'ri YouTube havola formati.');
+  }
   const videoId = match[1];
 
   try {
@@ -98,9 +102,16 @@ async function fetchYouTubeViaRapidAPI(videoUrl: string): Promise<any> {
       },
     });
 
-    if (!res.ok) return null;
+    if (!res.ok) {
+      throw new Error(`RapidAPI javobi noto'g'ri bo'ldi: HTTP ${res.status}`);
+    }
     const data = await res.json();
-    if (!data || data.status === 'ERROR') return null;
+    if (!data) {
+      throw new Error('RapidAPI ma\'lumot qaytarmadi');
+    }
+    if (data.status === 'ERROR') {
+      throw new Error(`RapidAPI xatolik qaytardi: ${data.message || 'Noma\'lum xatolik'}`);
+    }
 
     const formats: any[] = [];
     const seenQ = new Set<string>();
@@ -168,9 +179,9 @@ async function fetchYouTubeViaRapidAPI(videoUrl: string): Promise<any> {
       thumbnail: data.thumbnail?.thumbnails?.at(-1)?.url || data.thumbnail?.[0]?.url || '',
       formats
     };
-  } catch (err) {
+  } catch (err: any) {
     console.error('Bot RapidAPI helper error:', err);
-    return null;
+    throw err; // Keyingi catch bloki ushlashi va Telegramga yuborishi uchun
   }
 }
 
