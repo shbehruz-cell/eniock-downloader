@@ -71,26 +71,26 @@ export async function POST(request: NextRequest) {
     const platform = detectPlatform(sanitizedUrl);
 
     const ytDlpPath = await ensureYtDlpBinary();
-    const primaryFlags = await getExtraYtDlpFlags('ios,android,mweb');
+    const primaryFlags = await getExtraYtDlpFlags('tv_embedded,web_creator,ios');
 
     const cmd = `"${ytDlpPath}" ${primaryFlags} --dump-json -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" "${sanitizedUrl}"`;
     
     let stdoutData = '';
     try {
-      const { stdout } = await execPromise(cmd, { maxBuffer: 10 * 1024 * 1024 });
+      const { stdout } = await execPromise(cmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
       stdoutData = stdout;
     } catch (execError: any) {
-      console.warn('Primary yt-dlp extraction failed, trying TV/MWeb client fallback:', execError.message);
-      const fallbackFlags = await getExtraYtDlpFlags('tv,mweb,android');
+      console.warn('Primary client failed, trying ios,android fallback:', execError.message);
+      const fallbackFlags = await getExtraYtDlpFlags('ios,android,tv_embedded');
       const retryCmd = `"${ytDlpPath}" ${fallbackFlags} --dump-json -f "best" "${sanitizedUrl}"`;
       try {
-        const { stdout } = await execPromise(retryCmd, { maxBuffer: 10 * 1024 * 1024 });
+        const { stdout } = await execPromise(retryCmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
         stdoutData = stdout;
       } catch (retryErr: any) {
-        console.warn('Secondary yt-dlp extraction failed, trying basic client:', retryErr.message);
-        const basicFlags = await getExtraYtDlpFlags('mweb,web');
+        console.warn('Secondary client failed, trying web fallback:', retryErr.message);
+        const basicFlags = await getExtraYtDlpFlags('web,mweb');
         const finalCmd = `"${ytDlpPath}" ${basicFlags} --dump-json -f "best" "${sanitizedUrl}"`;
-        const { stdout } = await execPromise(finalCmd, { maxBuffer: 10 * 1024 * 1024 });
+        const { stdout } = await execPromise(finalCmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
         stdoutData = stdout;
       }
     }

@@ -63,12 +63,15 @@ export async function getFfmpegLocationArg(): Promise<string> {
   return '';
 }
 
-export async function getExtraYtDlpFlags(playerClients = 'ios,android,mweb'): Promise<string> {
+export async function getExtraYtDlpFlags(playerClients = 'tv_embedded,web_creator,ios'): Promise<string> {
   const flags: string[] = [
     '--no-check-certificates',
     '--no-warnings',
     '--geo-bypass',
-    `--extractor-args "youtube:player_client=${playerClients}"`
+    '--age-limit', '99',
+    '--sleep-interval', '1',
+    '--max-sleep-interval', '3',
+    `--extractor-args`, `youtube:player_client=${playerClients}`
   ];
 
   const ffmpegLocationArg = await getFfmpegLocationArg();
@@ -89,7 +92,7 @@ export async function getExtraYtDlpFlags(playerClients = 'ios,android,mweb'): Pr
     const cookiesPath = path.join(binDir, 'cookies.txt');
     try {
       fs.writeFileSync(cookiesPath, cookiesEnv.trim(), 'utf-8');
-      flags.push(`--cookies "${cookiesPath}"`);
+      flags.push(`--cookies`, cookiesPath);
     } catch (err) {
       console.error('Failed to write cookies.txt:', err);
     }
@@ -97,6 +100,7 @@ export async function getExtraYtDlpFlags(playerClients = 'ios,android,mweb'): Pr
 
   return flags.join(' ');
 }
+
 
 export async function ensureYtDlpBinary(): Promise<string> {
   const isWindows = process.platform === 'win32';
