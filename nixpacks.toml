@@ -1,6 +1,12 @@
-# Nixpacks configuration for Railway.app to bypass python checks during build
+# Nixpacks configuration for Railway.app
 [phases.setup]
-nixPkgs = ['nodejs', 'python3', 'ffmpeg']
+nixPkgs = ['nodejs_20', 'python3', 'ffmpeg', 'yt-dlp']
 
 [phases.install]
 cmds = ['npm install --ignore-scripts']
+
+[phases.build]
+cmds = ['npm run build']
+
+[start]
+cmd = 'npm run start'
