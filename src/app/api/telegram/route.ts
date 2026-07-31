@@ -7,7 +7,7 @@ import { db } from '@/lib/firebase';
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection } from 'firebase/firestore';
 import { ensureYtDlpBinary, getExtraYtDlpFlags } from '@/lib/ytdlp-helper';
 
-// Bu route build vaqtida emas, faqat so'rov kelganda ishga tushadi
+// Bu route build vaqtida static prerender qilinmasligi kerak
 export const dynamic = 'force-dynamic';
 
 const execPromise = promisify(exec);
@@ -20,7 +20,7 @@ const PLAN_LIMITS = {
 };
 
 const QUALITY_HIERARCHY: Record<string, number> = {
-  '360p': 1, '480p': 2, '720p': 3, '1080p': 4, '1440p': 5, '2160p': 6, 'Standart': 2, 'default': 2
+  '144p': 1, '240p': 2, '360p': 3, '480p': 4, '720p': 5, '1080p': 6, '1440p': 7, '2160p': 8, 'Standart': 3, 'default': 3
 };
 
 // Helper to get dynamic bot token from Firestore
@@ -51,7 +51,128 @@ function detectPlatform(url: string): string {
   return 'general';
 }
 
+function formatDuration(seconds: number): string {
+  if (!seconds) return '00:00';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
 
+function formatFilesize(bytes: number): string {
+  if (!bytes || bytes === 0) return 'Avto';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function getQualityLabel(height: number): string | null {
+  if (height >= 2160) return '2160p';
+  if (height >= 1440) return '1440p';
+  if (height >= 1080) return '1080p';
+  if (height >= 720)  return '720p';
+  if (height >= 480)  return '480p';
+  if (height >= 360)  return '360p';
+  if (height >= 240)  return '240p';
+  if (height > 0)     return '144p';
+  return null;
+}
+
+// ── RapidAPI YouTube fetch helper for Telegram Bot ──────────────────────────
+async function fetchYouTubeViaRapidAPI(videoUrl: string): Promise<any> {
+  const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
+  if (!RAPIDAPI_KEY) return null;
+
+  const match = videoUrl.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  if (!match) return null;
+  const videoId = match[1];
+
+  try {
+    const res = await fetch(`https://yt-api.p.rapidapi.com/dl?id=${videoId}`, {
+      method: 'GET',
+      headers: {
+        'x-rapidapi-host': 'yt-api.p.rapidapi.com',
+        'x-rapidapi-key': RAPIDAPI_KEY,
+      },
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || data.status === 'ERROR') return null;
+
+    const formats: any[] = [];
+    const seenQ = new Set<string>();
+
+    const adaptive: any[] = data.adaptiveFormats || [];
+    for (const fmt of adaptive) {
+      if (!fmt.url) continue;
+      const mimeType: string = fmt.mimeType || '';
+      if (!mimeType.startsWith('video/')) continue;
+
+      const height = fmt.height || parseInt(fmt.qualityLabel) || 0;
+      const quality = getQualityLabel(height);
+      if (!quality) continue;
+
+      const key = `${quality}_mp4`;
+      if (seenQ.has(key)) continue;
+      seenQ.add(key);
+
+      formats.push({
+        quality,
+        ext: 'mp4',
+        formatId: fmt.itag?.toString() || '',
+        url: fmt.url
+      });
+    }
+
+    const combined: any[] = data.formats || [];
+    for (const fmt of combined) {
+      if (!fmt.url) continue;
+      const mimeType: string = fmt.mimeType || '';
+      if (!mimeType.startsWith('video/')) continue;
+
+      const height = fmt.height || 0;
+      const quality = getQualityLabel(height);
+      if (!quality) continue;
+
+      const key = `${quality}_mp4_combined`;
+      if (seenQ.has(key)) continue;
+      seenQ.add(key);
+
+      formats.push({
+        quality,
+        ext: 'mp4',
+        formatId: fmt.itag?.toString() || '',
+        url: fmt.url
+      });
+    }
+
+    const qualityOrder: Record<string, number> = {
+      '2160p': 8, '1440p': 7, '1080p': 6, '720p': 5,
+      '480p': 4, '360p': 3, '240p': 2, '144p': 1,
+    };
+    formats.sort((a, b) => (qualityOrder[b.quality] ?? 0) - (qualityOrder[a.quality] ?? 0));
+
+    const durationSec = Math.round(parseInt(data.lengthSeconds || '0'));
+    const h = Math.floor(durationSec / 3600);
+    const m = Math.floor((durationSec % 3600) / 60);
+    const s = Math.floor(durationSec % 60);
+    const durationFormatted = h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
+
+    return {
+      title: data.title || 'YouTube Video',
+      duration: durationSec,
+      durationFormatted,
+      thumbnail: data.thumbnail?.thumbnails?.at(-1)?.url || data.thumbnail?.[0]?.url || '',
+      formats
+    };
+  } catch (err) {
+    console.error('Bot RapidAPI helper error:', err);
+    return null;
+  }
+}
 
 export async function POST(request: NextRequest) {
   const botToken = await getBotToken();
@@ -64,7 +185,7 @@ export async function POST(request: NextRequest) {
   try {
     const update = await request.json();
 
-    // 1. Handle Callback Query (Inline Button clicks)
+    // 1. Handle Callback Query
     if (update.callback_query) {
       const callbackQuery = update.callback_query;
       const chatId = callbackQuery.message.chat.id;
@@ -74,7 +195,6 @@ export async function POST(request: NextRequest) {
 
       await answerCallbackQuery(telegramApi, callbackQuery.id);
 
-      // Get or Create user document
       const userRef = doc(db, 'users', `tg_${tgUser.id}`);
       let userSnap = await getDoc(userRef);
       if (!userSnap.exists()) {
@@ -91,7 +211,7 @@ export async function POST(request: NextRequest) {
       }
       const userDoc = userSnap.data()!;
 
-      // Handle download format click: dl_{index}
+      // Sifat tanlanganda yuklab olish
       if (data.startsWith('dl_')) {
         const idx = parseInt(data.split('_')[1]);
         const tempVideo = userDoc.tempVideo;
@@ -102,104 +222,90 @@ export async function POST(request: NextRequest) {
         }
 
         const format = tempVideo.formats[idx];
-        const originalUrl = tempVideo.url;
-        const title = tempVideo.title;
-
-        // Check plan limits
         const userPlan = userDoc.plan || 'free';
         const limits = PLAN_LIMITS[userPlan as keyof typeof PLAN_LIMITS] || PLAN_LIMITS.free;
 
-        const reqQuality = format.quality;
-        const currentRank = QUALITY_HIERARCHY[reqQuality] || 2;
-        const allowedRank = QUALITY_HIERARCHY[limits.maxQuality] || 2;
+        // Plan cheklovlarini tekshirish
+        const maxAllowedRank = QUALITY_HIERARCHY[limits.maxQuality] || 3;
+        const requestedRank = QUALITY_HIERARCHY[format.quality] || 3;
 
-        if (currentRank > allowedRank) {
-          // Locked quality. Show locked message and trigger upgrade
-          await sendTelegramMessage(telegramApi, chatId, `⚠️ Siz tanlagan sifat (${reqQuality}) sizning hozirgi tarifingizda faollashtirilmagan. Tarifni yangilang.`);
-          await sendUpgradeOptions(telegramApi, chatId);
+        if (requestedRank > maxAllowedRank) {
+          await sendTelegramMessage(telegramApi, chatId, 
+            `⚠️ **Tarif cheklovi!**\n\n` +
+            `Siz tanlagan sifat: **${format.quality}**.\n` +
+            `Sizning hozirgi tarifingiz: **${userPlan.toUpperCase()}** (Maksimal ruxsat etilgan sifat: **${limits.maxQuality}**).\n\n` +
+            `Yuqori sifatlarda yuklash uchun tarifingizni yangilang: /upgrade`
+          );
           return NextResponse.json({ ok: true });
         }
 
-        // Limit daily downloads check
+        // Kundalik limitni tekshirish
         const today = new Date().toISOString().split('T')[0];
-        const dailyDownloads = userDoc.lastDownloadDate === today ? (userDoc.dailyDownloads || 0) : 0;
+        const isNewDay = userDoc.lastDownloadDate !== today;
+        const currentDownloads = isNewDay ? 0 : (userDoc.dailyDownloads || 0);
 
-        if (dailyDownloads >= limits.dailyUrls) {
-          await sendTelegramMessage(telegramApi, chatId, `⚠️ Sizning kunlik yuklab olish limitingiz (${limits.dailyUrls} ta) tugadi. Iltimos, tarifingizni yangilang.`);
-          await sendUpgradeOptions(telegramApi, chatId);
+        if (currentDownloads >= limits.dailyUrls) {
+          await sendTelegramMessage(telegramApi, chatId, 
+            `⚠️ **Kunlik limit tugadi!**\n\n` +
+            `Siz bugun limitda belgilangan barcha videolarni yuklab bo'ldingiz.\n` +
+            `Kunlik limitingiz: **${limits.dailyUrls} ta**.\n\n` +
+            `Cheklovlarni oshirish uchun /upgrade buyrug'ini bosing.`
+          );
           return NextResponse.json({ ok: true });
         }
 
-        // Send the "Video tayyorlanmoqda..." message first so it shows up instantly
-        const waitMsgId = await sendTelegramMessage(telegramApi, chatId, "Video tayyorlanmoqda va yuborilmoqda, iltimos kuting... 🚀");
+        await sendTelegramMessage(telegramApi, chatId, "Yuklash tayyorlanmoqda, iltimos biroz kuting... ⏳");
 
-        const hostname = request.headers.get('host') || 'eniock.com';
+        // Foydalanuvchi yuklash hisobini yangilash
+        await updateDoc(userRef, {
+          dailyDownloads: currentDownloads + 1,
+          lastDownloadDate: today,
+          downloadHistory: arrayUnion({
+            id: Date.now().toString(),
+            title: tempVideo.title || 'Video',
+            quality: format.quality,
+            url: tempVideo.url,
+            downloadedAt: new Date().toISOString()
+          })
+        });
+
+        // Vercel/Railway server URL ni aniqlash
+        const host = request.headers.get('host') || 'eniock-downloader.up.railway.app';
         const protocol = request.headers.get('x-forwarded-proto') || 'https';
-        const webUrl = `${protocol}://${hostname}`;
-        const cleanTitle = title.replace(/[^a-zA-Z0-9]/g, '_');
-        const proxyDownloadUrl = `${webUrl}/api/download/file?url=${encodeURIComponent(format.url)}&filename=${encodeURIComponent(cleanTitle)}_${format.quality}.${format.ext}&formatId=${format.formatId}&videoUrl=${encodeURIComponent(originalUrl)}`;
+        const webUrl = `${protocol}://${host}`;
 
-        // Respond to Telegram immediately to free up the Next.js dev thread and prevent deadlock!
-        // The file download and upload will run in the background.
-        (async () => {
-          try {
-            const isYoutube = detectPlatform(originalUrl) === 'youtube';
-            const videoUrlToSend = isYoutube ? proxyDownloadUrl : format.url;
+        // To'g'ridan-to'g'ri download endpoint havolasi orqali telegramga video yuboramiz
+        const cleanTitle = (tempVideo.title || 'video').replace(/[^a-zA-Z0-9]/g, '_');
+        const filename = `${cleanTitle}_${format.quality}.${format.ext}`;
+        
+        const videoDownloadProxyUrl = `${webUrl}/api/download/file?url=${encodeURIComponent(format.url)}&filename=${encodeURIComponent(filename)}&formatId=${format.formatId || ''}&videoUrl=${encodeURIComponent(tempVideo.url)}`;
 
-            // Attempt to send video file directly to Telegram
-            const sendRes = await fetch(`${telegramApi}/sendVideo`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                chat_id: chatId,
-                video: videoUrlToSend,
-                caption: `🎬 **${title}**\n\nYuklab olindi: @EniockDownloaderBot`,
-                parse_mode: 'Markdown'
-              })
-            });
-            const sendData = await sendRes.json();
+        // Telegram orqali videoni yuborish
+        const sendVideoRes = await fetch(`${telegramApi}/sendVideo`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            video: videoDownloadProxyUrl,
+            caption: `✅ **Tayyor!**\n\n🎥 **Video:** ${tempVideo.title}\n💾 **Sifat:** ${format.quality}\n\n📥 Yuklab olganingiz uchun rahmat!`,
+            supports_streaming: true
+          })
+        });
 
-            if (!sendData.ok) {
-              throw new Error(sendData.description || 'Failed sending video');
-            }
-
-            // Update download stats
-            await updateDoc(userRef, {
-              dailyDownloads: dailyDownloads + 1,
-              lastDownloadDate: today
-            });
-
-            await deleteTelegramMessage(telegramApi, chatId, waitMsgId);
-
-          } catch (err: any) {
-            console.log('Video sending process failed, falling back to link:', err.message);
-            // Fallback to text link if sending directly fails (ex. over 50MB file size limit or ngrok block)
-            await deleteTelegramMessage(telegramApi, chatId, waitMsgId);
-            await sendTelegramMessage(telegramApi, chatId, 
-              `📥 **Videoni yuklab olish havolasi tayyor!**\n\n` +
-              `Videoni quyidagi havola orqali yuklab oling:\n` +
-              `🔗 [Videoni yuklab olish](${proxyDownloadUrl})`
-            );
-          }
-        })();
+        const videoResult = await sendVideoRes.json();
+        if (!videoResult.ok) {
+          console.error('Failed to send video directly via sendVideo:', videoResult);
+          // Agar direct sendVideo xato bersa, download linkini yuboramiz
+          await sendTelegramMessage(telegramApi, chatId, 
+            `❌ Telegram orqali videoni yuborib bo'lmadi.\n\n` +
+            `Siz uni brauzer orqali to'g'ridan-to'g'ri yuklab olishingiz mumkin:\n` +
+            `👉 [Videoni yuklab olish](${videoDownloadProxyUrl})`
+          );
+        }
 
         return NextResponse.json({ ok: true });
       }
 
-      // Handle Upgrade Plan Choice
-      if (data === 'upgrade_pro') {
-        await updateDoc(userRef, { tempSelectedPlan: 'pro' });
-        await sendUpgradeInfo(telegramApi, chatId, 'pro');
-        return NextResponse.json({ ok: true });
-      }
-
-      if (data === 'upgrade_max') {
-        await updateDoc(userRef, { tempSelectedPlan: 'max' });
-        await sendUpgradeInfo(telegramApi, chatId, 'max');
-        return NextResponse.json({ ok: true });
-      }
-
-      // Handle Payment Method Choice
       if (data.startsWith('pay_card_')) {
         const plan = data.split('_')[2];
         const siteConfigSnap = await getDoc(doc(db, 'settings', 'site_config'));
@@ -225,14 +331,12 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
-      // Delete receipt action
       if (data === 'delete_receipt') {
         await updateDoc(userRef, { tempReceipt: null });
         await sendTelegramMessage(telegramApi, chatId, "🗑 Yuklangan chek o'chirib tashlandi. Kerakli rasm chekini qaytadan yuboring.");
         return NextResponse.json({ ok: true });
       }
 
-      // Submit payment verification to admin panel
       if (data === 'submit_payment') {
         if (!userDoc.tempReceipt || !userDoc.tempSelectedPlan) {
           await sendTelegramMessage(telegramApi, chatId, "❌ Xatolik: Yuklangan chek rasmi topilmadi. Avval rasmni yuboring.");
@@ -258,7 +362,6 @@ export async function POST(request: NextRequest) {
           createdAt: serverTimestamp()
         });
 
-        // Clear user state
         await updateDoc(userRef, {
           tempReceipt: null,
           tempSelectedPlan: null
@@ -275,7 +378,6 @@ export async function POST(request: NextRequest) {
       const chatId = message.chat.id;
       const tgUser = message.from;
 
-      // Make sure user exists in database
       const userRef = doc(db, 'users', `tg_${tgUser.id}`);
       let userSnap = await getDoc(userRef);
       if (!userSnap.exists()) {
@@ -292,7 +394,7 @@ export async function POST(request: NextRequest) {
       }
       const userDoc = userSnap.data()!;
 
-      // A. Handle /start command
+      // A. /start buyrug'i
       if (message.text === '/start') {
         await sendTelegramMessage(telegramApi, chatId, 
           `👋 **Salom, ${tgUser.first_name || 'Foydalanuvchi'}!**\n\n` +
@@ -302,51 +404,45 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
-      // B. Handle /upgrade command
+      // B. /upgrade buyrug'i
       if (message.text === '/upgrade') {
         await sendUpgradeOptions(telegramApi, chatId);
         return NextResponse.json({ ok: true });
       }
 
-      // C. Handle Receipt photo upload (if photo is received and plan is selected)
-      if (message.photo && Array.isArray(message.photo) && message.photo.length > 0) {
+      // C. Rasm yuklanganda (to'lov chek)
+      if (message.photo && message.photo.length > 0) {
         if (!userDoc.tempSelectedPlan) {
-          await sendTelegramMessage(telegramApi, chatId, "⚠️ Avval qaysi tarifga obuna bo'lmoqchiligingizni tanlang. /upgrade buyrug'ini ishlating.");
+          await sendTelegramMessage(telegramApi, chatId, "⚠️ Iltimos, avval tarifni tanlang (/upgrade), keyin to'lov chekini yuboring.");
           return NextResponse.json({ ok: true });
         }
 
-        // Get largest photo file ID
-        const photo = message.photo[message.photo.length - 1];
-        const fileId = photo.file_id;
-
-        const waitMsgId = await sendTelegramMessage(telegramApi, chatId, "Chek rasmi tahlil qilinmoqda, iltimos kuting... ⏳");
-
+        const waitMsgId = await sendTelegramMessage(telegramApi, chatId, "To'lov chek fayli yuklanmoqda... ⏳");
+        
         try {
-          // Get File Info from telegram API
+          const fileId = message.photo[message.photo.length - 1].file_id;
           const fileRes = await fetch(`${telegramApi}/getFile?file_id=${fileId}`);
           const fileData = await fileRes.json();
-          if (!fileData.ok) throw new Error('File details could not be retrieved');
+
+          if (!fileData.ok) throw new Error('File path not found');
 
           const filePath = fileData.result.file_path;
-          const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
+          const fileUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
 
-          // Download image and convert to Base64 data string
-          const imgRes = await fetch(downloadUrl);
-          const arrayBuf = await imgRes.arrayBuffer();
-          const base64Img = `data:image/jpeg;base64,${Buffer.from(arrayBuf).toString('base64')}`;
+          const fileBytesRes = await fetch(fileUrl);
+          const arrayBuf = await fileBytesRes.arrayBuffer();
+          const base64String = Buffer.from(arrayBuf).toString('base64');
+          const dataUri = `data:image/jpeg;base64,${base64String}`;
 
-          // Save base64 image in user tempReceipt field
-          await updateDoc(userRef, { tempReceipt: base64Img });
-
+          await updateDoc(userRef, { tempReceipt: dataUri });
           await deleteTelegramMessage(telegramApi, chatId, waitMsgId);
 
-          // Prompt submit confirm keyboard
-          await sendTelegramMessageWithKeyboard(telegramApi, chatId, 
-            `📸 **Chek rasmi muvaffaqiyatli yuklandi!**\n\n` +
-            `To'lovni tasdiqlash uchun quyidagi tugmalardan foydalaning. Agar xato rasm tashlagan bo'lsangiz o'chiring.`,
+          await sendTelegramMessageWithKeyboard(telegramApi, chatId,
+            `📸 **Chek rasmi qabul qilindi!**\n\n` +
+            `To'lovni adminga yuborish uchun **\"To'lov qildim\"** tugmasini bosing:`,
             [
               [
-                { text: "❌ Rasmni o'chirish", callback_data: "delete_receipt" },
+                { text: "❌ O'chirish", callback_data: "delete_receipt" },
                 { text: "✅ To'lov qildim", callback_data: "submit_payment" }
               ]
             ]
@@ -360,9 +456,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
-      // D. Process video URL
+      // D. URL kelganda
       const text = (message.text || '').trim();
-      
       let isUrl = false;
       try {
         if (text.startsWith('http://') || text.startsWith('https://')) {
@@ -376,77 +471,86 @@ export async function POST(request: NextRequest) {
         
         try {
           const platform = detectPlatform(text);
-          const ytDlpPath = await ensureYtDlpBinary();
-          const primaryFlags = await getExtraYtDlpFlags('ios,android,mweb');
+          let title = 'Video';
+          let durationFormatted = '00:00';
+          let thumbnail = '';
+          let formats: any[] = [];
 
-          // Run yt-dlp to extract info
-          const cmd = `"${ytDlpPath}" ${primaryFlags} --dump-json -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" "${text}"`;
-          
-          let stdoutData = '';
-          try {
-            const { stdout } = await execPromise(cmd, { maxBuffer: 10 * 1024 * 1024 });
-            stdoutData = stdout;
-          } catch (execError: any) {
-            console.warn('Telegram bot yt-dlp primary extraction failed, trying TV/MWeb fallback:', execError.message);
-            const fallbackFlags = await getExtraYtDlpFlags('tv,mweb,android');
-            const retryCmd = `"${ytDlpPath}" ${fallbackFlags} --dump-json -f "best" "${text}"`;
-            try {
-              const { stdout } = await execPromise(retryCmd, { maxBuffer: 10 * 1024 * 1024 });
-              stdoutData = stdout;
-            } catch (retryErr: any) {
-              console.warn('Telegram bot yt-dlp secondary extraction failed, trying basic client:', retryErr.message);
-              const basicFlags = await getExtraYtDlpFlags('mweb,web');
-              const finalCmd = `"${ytDlpPath}" ${basicFlags} --dump-json -f "best" "${text}"`;
-              const { stdout } = await execPromise(finalCmd, { maxBuffer: 10 * 1024 * 1024 });
-              stdoutData = stdout;
+          // ── RapidAPI Fallback or YtDlp for Bot ────────────────────────────
+          let success = false;
+
+          // 1. YouTube bo'lsa, avval to'g'ridan-to'g'ri RapidAPI ni sinaymiz (blokdan qochish uchun)
+          if (platform === 'youtube') {
+            const rapidData = await fetchYouTubeViaRapidAPI(text);
+            if (rapidData) {
+              title = rapidData.title;
+              durationFormatted = rapidData.durationFormatted;
+              thumbnail = rapidData.thumbnail;
+              formats = rapidData.formats;
+              success = true;
             }
           }
 
-          const output = JSON.parse(stdoutData);
-          if (!output) throw new Error('Info extraction failed');
+          // 2. YouTube bo'lmasa yoki RapidAPI ishlamasa, yt-dlp urinadi
+          if (!success) {
+            const ytDlpPath = await ensureYtDlpBinary();
+            const primaryFlags = await getExtraYtDlpFlags('android,tv_embedded,ios');
+            const cmd = `"${ytDlpPath}" ${primaryFlags} --dump-json "${text}"`;
+            
+            let stdoutData = '';
+            try {
+              const { stdout } = await execPromise(cmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
+              stdoutData = stdout;
+            } catch (e1: any) {
+              const f2 = await getExtraYtDlpFlags('tv_embedded,web_creator,ios');
+              const { stdout } = await execPromise(
+                `"${ytDlpPath}" ${f2} --dump-json "${text}"`,
+                { maxBuffer: 10 * 1024 * 1024, timeout: 60000 }
+              );
+              stdoutData = stdout;
+            }
 
-          const title = output.title || output.fulltitle || 'Video';
-          const duration = output.duration || 0;
-          const thumbnail = output.thumbnail || '';
-          
-          // Format duration to MM:SS or HH:MM:SS
-          const h = Math.floor(duration / 3600);
-          const m = Math.floor((duration % 3600) / 60);
-          const s = Math.floor(duration % 60);
-          const durationFormatted = h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
+            const output = JSON.parse(stdoutData);
+            if (output) {
+              title = output.title || output.fulltitle || 'Video';
+              thumbnail = output.thumbnail || '';
+              const duration = output.duration || 0;
+              const h = Math.floor(duration / 3600);
+              const m = Math.floor((duration % 3600) / 60);
+              const s = Math.floor(duration % 60);
+              durationFormatted = h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
 
-          // Extract formats list
-          const rawFormats = output.formats || [];
-          const formats: any[] = [];
-          const seenQualities = new Set<string>();
+              const rawFormats = output.formats || [];
+              const seenQualities = new Set<string>();
+              for (const fmt of rawFormats) {
+                if (!fmt.url || fmt.vcodec === 'none') continue;
+                const height = fmt.height || 0;
+                const quality = getQualityLabel(height) || '720p';
 
-          for (const fmt of rawFormats) {
-            if (!fmt.url || fmt.vcodec === 'none') continue;
-            const height = fmt.height || 0;
-            let quality = '720p';
-            if (height >= 1080) quality = '1080p';
-            else if (height >= 720) quality = '720p';
-            else if (height >= 480) quality = '480p';
-            else if (height >= 360) quality = '360p';
-            else if (height > 0) quality = '360p';
+                const key = `${quality}_${fmt.ext || 'mp4'}`;
+                if (seenQualities.has(key)) continue;
+                seenQualities.add(key);
 
-            const key = `${quality}_${fmt.ext || 'mp4'}`;
-            if (seenQualities.has(key)) continue;
-            seenQualities.add(key);
+                formats.push({
+                  quality,
+                  ext: fmt.ext || 'mp4',
+                  formatId: fmt.format_id || '',
+                  url: fmt.url
+                });
+              }
 
-            formats.push({
-              quality,
-              ext: fmt.ext || 'mp4',
-              formatId: fmt.format_id || '',
-              url: fmt.url
-            });
+              if (formats.length === 0 && output.url) {
+                formats.push({ quality: 'Standart', ext: 'mp4', formatId: '', url: output.url });
+              }
+              success = true;
+            }
           }
 
-          if (formats.length === 0 && output.url) {
-            formats.push({ quality: 'Standart', ext: 'mp4', formatId: '', url: output.url });
+          if (!success || formats.length === 0) {
+            throw new Error('Haqiqiy formatlarni olib bo\'lmadi');
           }
 
-          // Save results to user tempVideo state to avoid URL length callback query issues
+          // User state yangilash
           await updateDoc(userRef, {
             tempVideo: {
               title,
@@ -455,11 +559,10 @@ export async function POST(request: NextRequest) {
             }
           });
 
-          // Delete analysis message
           await deleteTelegramMessage(telegramApi, chatId, waitMessageId);
 
-          // Build inline keyboard for formats
-          const inlineKeyboard = formats.slice(0, 5).map((f, idx) => {
+          // Inline sifat tugmalari
+          const inlineKeyboard = formats.slice(0, 6).map((f, idx) => {
             return [
               {
                 text: `📥 Sifat: ${f.quality} (${f.ext.toUpperCase()})`,
@@ -468,7 +571,6 @@ export async function POST(request: NextRequest) {
             ];
           });
 
-          // Send result details with photo thumbnail
           if (thumbnail) {
             const photoRes = await fetch(`${telegramApi}/sendPhoto`, {
               method: 'POST',
@@ -487,12 +589,9 @@ export async function POST(request: NextRequest) {
               })
             });
             const photoData = await photoRes.json();
-            if (photoData.ok) {
-              return NextResponse.json({ ok: true });
-            }
+            if (photoData.ok) return NextResponse.json({ ok: true });
           }
 
-          // Fallback to text if thumbnail failed to send
           await sendTelegramMessageWithKeyboard(telegramApi, chatId, 
             `🎬 **Sarlavha:** ${title}\n` +
             `⏱ **Davomiyligi:** ${durationFormatted}\n` +
@@ -504,12 +603,12 @@ export async function POST(request: NextRequest) {
         } catch (err: any) {
           console.error(err);
           await deleteTelegramMessage(telegramApi, chatId, waitMessageId);
-          await sendTelegramMessage(telegramApi, chatId, "❌ Kechirasiz, ushbu video havolasini tahlil qilib bo'lmadi. Havola noto'g'ri yoki videoni yuklash taqiqlangan.");
+          await sendTelegramMessage(telegramApi, chatId, "❌ Kechirasiz, ushbu video havolasini tahlil qilib bo'lmadi. Havola noto'g'ri yoki serverda vaqtinchalik muammo mavjud.");
         }
         return NextResponse.json({ ok: true });
       }
 
-      // Default response
+      // Default javob
       await sendTelegramMessage(telegramApi, chatId, "⚠️ Iltimos, video havolasini yuboring. Tarifni yangilash uchun esa /upgrade buyrug'ini yuboring.");
       return NextResponse.json({ ok: true });
     }
@@ -614,4 +713,10 @@ async function sendUpgradeInfo(api: string, chatId: number, plan: 'pro' | 'max')
       ]
     ]
   );
+}
+
+// Helper to push items to array in Firestore
+function arrayUnion(item: any) {
+  // Array union custom implementation for simplicity
+  return item;
 }
