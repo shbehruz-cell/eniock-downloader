@@ -501,13 +501,17 @@ export async function POST(request: NextRequest) {
 
           // 1. YouTube bo'lsa, avval to'g'ridan-to'g'ri RapidAPI ni sinaymiz (blokdan qochish uchun)
           if (platform === 'youtube') {
-            const rapidData = await fetchYouTubeViaRapidAPI(text);
-            if (rapidData) {
-              title = rapidData.title;
-              durationFormatted = rapidData.durationFormatted;
-              thumbnail = rapidData.thumbnail;
-              formats = rapidData.formats;
-              success = true;
+            try {
+              const rapidData = await fetchYouTubeViaRapidAPI(text);
+              if (rapidData) {
+                title = rapidData.title;
+                durationFormatted = rapidData.durationFormatted;
+                thumbnail = rapidData.thumbnail;
+                formats = rapidData.formats;
+                success = true;
+              }
+            } catch (rapidErr) {
+              console.warn('RapidAPI failed (maybe HTTP 403), falling back to local yt-dlp:', rapidErr);
             }
           }
 
