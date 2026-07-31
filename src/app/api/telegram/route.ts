@@ -7,6 +7,9 @@ import { db } from '@/lib/firebase';
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection } from 'firebase/firestore';
 import { ensureYtDlpBinary } from '@/lib/ytdlp-helper';
 
+// Bu route build vaqtida emas, faqat so'rov kelganda ishga tushadi
+export const dynamic = 'force-dynamic';
+
 const execPromise = promisify(exec);
 
 // Plan limits configuration
