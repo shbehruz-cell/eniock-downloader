@@ -601,9 +601,9 @@ export async function POST(request: NextRequest) {
           );
 
         } catch (err: any) {
-          console.error(err);
+          console.error('Bot url analysis failed:', err);
           await deleteTelegramMessage(telegramApi, chatId, waitMessageId);
-          await sendTelegramMessage(telegramApi, chatId, "❌ Kechirasiz, ushbu video havolasini tahlil qilib bo'lmadi. Havola noto'g'ri yoki serverda vaqtinchalik muammo mavjud.");
+          await sendTelegramMessage(telegramApi, chatId, `❌ Video tahlil qilishda xatolik yuz berdi: ${err.message || 'Noma\'lum xato'}. Iltimos, keyinroq urinib ko'ring.`);
         }
         return NextResponse.json({ ok: true });
       }
