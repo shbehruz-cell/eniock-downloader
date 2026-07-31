@@ -596,16 +596,30 @@ export async function POST(request: NextRequest) {
           if (!success) {
             const ytDlpPath = await ensureYtDlpBinary();
 
+            const baseArgs = [
+              '--no-check-certificates',
+              '--no-warnings',
+              '--geo-bypass',
+              '--age-limit', '99',
+              '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            ];
+
             let stdoutData = '';
             try {
-              // 1-urinish: android client (eng ko'p formatlar)
-              const args1 = await getExtraYtDlpArgs('android,tv_embedded,ios');
-              const { stdout } = await execFilePromise(ytDlpPath, [...args1, '--dump-json', text], { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
+              // 1-urinish: mweb+web (eng to'liq format ro'yxati, 1080p+ ham kiritiladi)
+              const { stdout } = await execFilePromise(ytDlpPath, [
+                ...baseArgs,
+                '--extractor-args', 'youtube:player_client=mweb,tv_embedded',
+                '--dump-json', text
+              ], { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
               stdoutData = stdout;
             } catch (e1: any) {
-              // 2-urinish: tv_embedded client
-              const args2 = await getExtraYtDlpArgs('tv_embedded,web_creator,ios');
-              const { stdout } = await execFilePromise(ytDlpPath, [...args2, '--dump-json', text], { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
+              // 2-urinish: android+ios fallback
+              const { stdout } = await execFilePromise(ytDlpPath, [
+                ...baseArgs,
+                '--extractor-args', 'youtube:player_client=android,tv_embedded,ios',
+                '--dump-json', text
+              ], { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
               stdoutData = stdout;
             }
 
@@ -637,15 +651,16 @@ export async function POST(request: NextRequest) {
               }
 
               const rawFormats = output.formats || [];
-              // quality -> best format (audio ustun)
+              // Barcha formatlar ichidan har bir sifat uchun eng yaxshi versiyani olamiz
               const bestByQuality = new Map<string, any>();
 
               for (const fmt of rawFormats) {
                 if (!fmt.url) continue;
-                // Audio-only formatlarni o'tkazib yuboramiz
-                if (fmt.vcodec === 'none' || fmt.vcodec === null) continue;
+                // Faqat audio-only (vcodec string 'none') formatlarni o'tkazib yuboramiz.
+                // vcodec === null yoki undefined bo'lsa - bu video formatdir!
+                if (fmt.vcodec === 'none') continue;
 
-                // height qiymati bo'lmasa, format_note yoki qualityLabel dan olamiz
+                // height aniqlaymiz
                 let height = fmt.height || 0;
                 if (height === 0 && fmt.format_note) {
                   const m2 = fmt.format_note.match(/(\d+)p/);
@@ -661,7 +676,7 @@ export async function POST(request: NextRequest) {
                 if (!existing) {
                   bestByQuality.set(quality, { quality, ext: fmt.ext || 'mp4', formatId: fmt.format_id || '', url: fmt.url, hasAudio });
                 } else if (!existing.hasAudio && hasAudio) {
-                  // Audio bor versiyasiga almashtir
+                  // Audio bor versiyaga almashtiramiz
                   bestByQuality.set(quality, { quality, ext: fmt.ext || 'mp4', formatId: fmt.format_id || '', url: fmt.url, hasAudio });
                 }
               }

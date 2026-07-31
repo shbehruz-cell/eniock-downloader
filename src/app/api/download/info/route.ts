@@ -74,8 +74,9 @@ function parseYtdlpFormats(output: any, sanitizedUrl: string, platform: string):
 
   for (const fmt of rawFormats) {
     if (!fmt.url) continue;
-    // Audio-only formatlarni o'tkazamiz
-    if (fmt.vcodec === 'none' || fmt.vcodec === null) continue;
+    // Faqat audio-only (vcodec string 'none') ni o'tkazib yuboramiz.
+    // vcodec === null yoki undefined bo'lsa — bu video formatidir!
+    if (fmt.vcodec === 'none') continue;
 
     // height aniqlaymiz (format_note dan ham olishga harakat qilamiz)
     let height = fmt.height || 0;
@@ -286,21 +287,34 @@ export async function POST(request: NextRequest) {
 
     try {
       const ytDlpPath = await ensureYtDlpBinary();
-      // android client — eng ko'p va eng yuqori sifatli formatlarni qaytaradi
+      const baseArgs = [
+        '--no-check-certificates',
+        '--no-warnings',
+        '--geo-bypass',
+        '--age-limit', '99',
+        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      ];
+
+      // mweb+tv_embedded: eng to'liq format ro'yxati (1080p, 1440p, 4K ham kiritiladi)
       let stdoutData = '';
       try {
-        const args1 = await getExtraYtDlpArgs('android,tv_embedded,ios');
-        const { stdout } = await execFilePromise(ytDlpPath, [...args1, '--dump-json', sanitizedUrl], { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
+        const { stdout } = await execFilePromise(ytDlpPath, [
+          ...baseArgs,
+          '--extractor-args', 'youtube:player_client=mweb,tv_embedded',
+          '--dump-json', sanitizedUrl
+        ], { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
         stdoutData = stdout;
       } catch (e1: any) {
-        console.warn('android client failed:', e1.message);
+        console.warn('mweb client failed, trying android fallback:', e1.message);
         try {
-          const args2 = await getExtraYtDlpArgs('tv_embedded,web_creator,ios');
-          const { stdout } = await execFilePromise(ytDlpPath, [...args2, '--dump-json', sanitizedUrl], { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
+          const { stdout } = await execFilePromise(ytDlpPath, [
+            ...baseArgs,
+            '--extractor-args', 'youtube:player_client=android,tv_embedded,ios',
+            '--dump-json', sanitizedUrl
+          ], { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
           stdoutData = stdout;
         } catch (e2: any) {
-          console.warn('tv_embedded failed:', e2.message);
-          // bu xatoni tashqariga chiqaramiz — RapidAPI fallback ishlatiladi
+          console.warn('android fallback also failed:', e2.message);
           throw e2;
         }
       }
