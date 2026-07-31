@@ -20,6 +20,8 @@ export async function GET(request: NextRequest) {
         '-o', '-',
         '--no-check-certificates',
         '--no-warnings',
+        '--geo-bypass',
+        '--extractor-args', 'youtube:player_client=ios,android,mweb'
       ];
       if (ffmpegPath) {
         args.push('--ffmpeg-location', ffmpegPath);

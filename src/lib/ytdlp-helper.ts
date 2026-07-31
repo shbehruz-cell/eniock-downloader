@@ -63,6 +63,41 @@ export async function getFfmpegLocationArg(): Promise<string> {
   return '';
 }
 
+export async function getExtraYtDlpFlags(playerClients = 'ios,android,mweb'): Promise<string> {
+  const flags: string[] = [
+    '--no-check-certificates',
+    '--no-warnings',
+    '--geo-bypass',
+    `--extractor-args "youtube:player_client=${playerClients}"`
+  ];
+
+  const ffmpegLocationArg = await getFfmpegLocationArg();
+  if (ffmpegLocationArg) {
+    flags.push(ffmpegLocationArg);
+  }
+
+  const cookiesEnv = process.env.YOUTUBE_COOKIES || (process.env.YOUTUBE_COOKIES_BASE64 ? Buffer.from(process.env.YOUTUBE_COOKIES_BASE64, 'base64').toString('utf-8') : '');
+  if (cookiesEnv && cookiesEnv.trim().length > 0) {
+    const isWindows = process.platform === 'win32';
+    const binDir = (process.env.VERCEL || process.env.RAILWAY_ENVIRONMENT || !isWindows)
+      ? path.join('/tmp', 'bin')
+      : path.join(/*turbopackIgnore: true*/ process.cwd(), 'bin');
+
+    if (!fs.existsSync(binDir)) {
+      fs.mkdirSync(binDir, { recursive: true });
+    }
+    const cookiesPath = path.join(binDir, 'cookies.txt');
+    try {
+      fs.writeFileSync(cookiesPath, cookiesEnv.trim(), 'utf-8');
+      flags.push(`--cookies "${cookiesPath}"`);
+    } catch (err) {
+      console.error('Failed to write cookies.txt:', err);
+    }
+  }
+
+  return flags.join(' ');
+}
+
 export async function ensureYtDlpBinary(): Promise<string> {
   const isWindows = process.platform === 'win32';
   const isMac = process.platform === 'darwin';
