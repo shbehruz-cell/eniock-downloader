@@ -71,8 +71,8 @@ export async function getExtraYtDlpFlags(playerClients = 'tv_embedded,web_creato
     '--age-limit', '99',
     '--sleep-interval', '1',
     '--max-sleep-interval', '3',
-    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    `--extractor-args`, `youtube:player_client=${playerClients};skip=webpage,hls`
+    '--user-agent', "'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'",
+    `--extractor-args`, `"'youtube:player_client=${playerClients};skip=webpage,hls'"`
   ];
 
   const ffmpegLocationArg = await getFfmpegLocationArg();
