@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { ensureYtDlpBinary } from '@/lib/ytdlp-helper';
+import { ensureYtDlpBinary, getFfmpegLocationArg } from '@/lib/ytdlp-helper';
 
 const execPromise = promisify(exec);
 
@@ -71,11 +71,13 @@ export async function POST(request: NextRequest) {
     const platform = detectPlatform(sanitizedUrl);
 
     const ytDlpPath = await ensureYtDlpBinary();
+    const ffmpegLocationArg = await getFfmpegLocationArg();
+    const ffmpegStr = ffmpegLocationArg ? `${ffmpegLocationArg} ` : '';
 
     // YouTube, Instagram yoki boshqa saytlar uchun video va ovozni ffmpeg yordamida serverda 
     // to'g'ridan-to'g'ri birlashtirib (merging) bitta MP4 fayl qilib yuklash havolasini olamiz.
     // '-f bestvideo+bestaudio/best' buyrug'i video va ovozli eng yaxshi formatni tanlaydi.
-    const cmd = `"${ytDlpPath}" --dump-json --no-check-certificates --no-warnings -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" "${sanitizedUrl}"`;
+    const cmd = `"${ytDlpPath}" ${ffmpegStr}--dump-json --no-check-certificates --no-warnings -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" "${sanitizedUrl}"`;
     
     let stdoutData = '';
     try {
@@ -83,7 +85,7 @@ export async function POST(request: NextRequest) {
       stdoutData = stdout;
     } catch (execError: any) {
       // Fallback: Agar murakkab format so'rovi xato bersa, oddiy 'best' formatni so'raymiz
-      const retryCmd = `"${ytDlpPath}" --dump-json --no-check-certificates --no-warnings -f "best" "${sanitizedUrl}"`;
+      const retryCmd = `"${ytDlpPath}" ${ffmpegStr}--dump-json --no-check-certificates --no-warnings -f "best" "${sanitizedUrl}"`;
       const { stdout } = await execPromise(retryCmd, { maxBuffer: 10 * 1024 * 1024 });
       stdoutData = stdout;
     }

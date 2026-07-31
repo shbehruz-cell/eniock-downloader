@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { db } from '@/lib/firebase';
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection } from 'firebase/firestore';
-import { ensureYtDlpBinary } from '@/lib/ytdlp-helper';
+import { ensureYtDlpBinary, getFfmpegLocationArg } from '@/lib/ytdlp-helper';
 
 // Bu route build vaqtida emas, faqat so'rov kelganda ishga tushadi
 export const dynamic = 'force-dynamic';
@@ -377,16 +377,18 @@ export async function POST(request: NextRequest) {
         try {
           const platform = detectPlatform(text);
           const ytDlpPath = await ensureYtDlpBinary();
+          const ffmpegLocationArg = await getFfmpegLocationArg();
+          const ffmpegStr = ffmpegLocationArg ? `${ffmpegLocationArg} ` : '';
 
           // Run yt-dlp to extract info
-          const cmd = `"${ytDlpPath}" --dump-json --no-check-certificates --no-warnings -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" "${text}"`;
+          const cmd = `"${ytDlpPath}" ${ffmpegStr}--dump-json --no-check-certificates --no-warnings -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" "${text}"`;
           
           let stdoutData = '';
           try {
             const { stdout } = await execPromise(cmd, { maxBuffer: 10 * 1024 * 1024 });
             stdoutData = stdout;
           } catch (execError: any) {
-            const retryCmd = `"${ytDlpPath}" --dump-json --no-check-certificates --no-warnings -f "best" "${text}"`;
+            const retryCmd = `"${ytDlpPath}" ${ffmpegStr}--dump-json --no-check-certificates --no-warnings -f "best" "${text}"`;
             const { stdout } = await execPromise(retryCmd, { maxBuffer: 10 * 1024 * 1024 });
             stdoutData = stdout;
           }
