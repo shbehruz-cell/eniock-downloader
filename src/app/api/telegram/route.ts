@@ -306,6 +306,15 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
+      // Handle Upgrade Plan Choice (upgrade_pro yoki upgrade_max bosilganda)
+      if (data.startsWith('upgrade_')) {
+        const plan = data.split('_')[1] as 'pro' | 'max';
+        // Tanlangan tarifni foydalanuvchi state-da vaqtinchalik saqlaymiz (to'lov cheki bilan solishtirish uchun)
+        await updateDoc(userRef, { tempSelectedPlan: plan });
+        await sendUpgradeInfo(telegramApi, chatId, plan);
+        return NextResponse.json({ ok: true });
+      }
+
       if (data.startsWith('pay_card_')) {
         const plan = data.split('_')[2];
         const siteConfigSnap = await getDoc(doc(db, 'settings', 'site_config'));
