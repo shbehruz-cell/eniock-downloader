@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { ensureYtDlpBinary, getExtraYtDlpFlags } from '@/lib/ytdlp-helper';
@@ -56,7 +54,219 @@ function detectPlatform(url: string): string {
   return 'general';
 }
 
+function getQualityLabel(height: number): string | null {
+  if (height >= 2160) return '2160p';
+  if (height >= 1440) return '1440p';
+  if (height >= 1080) return '1080p';
+  if (height >= 720)  return '720p';
+  if (height >= 480)  return '480p';
+  if (height >= 360)  return '360p';
+  if (height >= 240)  return '240p';
+  if (height > 0)     return '144p';
+  return null;
+}
 
+function parseYtdlpFormats(output: any, sanitizedUrl: string, platform: string): VideoInfo {
+  const formats: VideoFormat[] = [];
+  const seenQualities = new Set<string>();
+  const rawFormats: any[] = output.formats || [];
+
+  for (const fmt of rawFormats) {
+    if (!fmt.url) continue;
+    if (fmt.vcodec === 'none') continue;
+
+    const height = fmt.height || 0;
+    const quality = getQualityLabel(height);
+    if (!quality) continue;
+
+    const hasAudio = fmt.acodec && fmt.acodec !== 'none';
+    const key = `${quality}_${fmt.ext || 'mp4'}`;
+
+    if (seenQualities.has(key)) {
+      const existingIdx = formats.findIndex(f => f.quality === quality && f.ext === (fmt.ext || 'mp4'));
+      if (existingIdx >= 0 && hasAudio && formats[existingIdx].acodec === 'none') {
+        const size = fmt.filesize || fmt.filesize_approx || 0;
+        formats[existingIdx] = {
+          quality,
+          resolution: fmt.resolution || (fmt.width && fmt.height ? `${fmt.width}x${fmt.height}` : quality),
+          filesize: size,
+          filesizeFormatted: formatFilesize(size),
+          url: fmt.url,
+          ext: fmt.ext || 'mp4',
+          vcodec: fmt.vcodec || 'h264',
+          acodec: fmt.acodec || 'aac',
+          formatId: fmt.format_id || '',
+        };
+      }
+      continue;
+    }
+
+    seenQualities.add(key);
+    const size = fmt.filesize || fmt.filesize_approx || 0;
+    formats.push({
+      quality,
+      resolution: fmt.resolution || (fmt.width && fmt.height ? `${fmt.width}x${fmt.height}` : quality),
+      filesize: size,
+      filesizeFormatted: formatFilesize(size),
+      url: fmt.url,
+      ext: fmt.ext || 'mp4',
+      vcodec: fmt.vcodec || 'h264',
+      acodec: fmt.acodec || 'aac',
+      formatId: fmt.format_id || '',
+    });
+  }
+
+  if (formats.length === 0 && output.url) {
+    const h = output.height || 0;
+    const q = getQualityLabel(h) || '360p';
+    formats.push({
+      quality: q,
+      resolution: output.resolution || `${output.width || '?'}x${h || '?'}`,
+      filesize: 0,
+      filesizeFormatted: 'Avto',
+      url: output.url,
+      ext: output.ext || 'mp4',
+      vcodec: output.vcodec || 'h264',
+      acodec: output.acodec || 'aac',
+      formatId: output.format_id || '',
+    });
+  }
+
+  const qualityOrder: Record<string, number> = {
+    '2160p': 8, '1440p': 7, '1080p': 6, '720p': 5,
+    '480p': 4, '360p': 3, '240p': 2, '144p': 1,
+  };
+  formats.sort((a, b) => (qualityOrder[b.quality] ?? 0) - (qualityOrder[a.quality] ?? 0));
+
+  return {
+    title: output.title || output.fulltitle || 'Untitled Video',
+    duration: output.duration || 0,
+    durationFormatted: formatDuration(output.duration || 0),
+    thumbnail: output.thumbnail || output.thumbnails?.[0]?.url || '',
+    url: sanitizedUrl,
+    platform: platform.toUpperCase(),
+    formats,
+  };
+}
+
+// ── RapidAPI YouTube fallback ──────────────────────────────────────────────
+async function fetchYouTubeViaRapidAPI(videoUrl: string, platform: string): Promise<VideoInfo | null> {
+  const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
+  if (!RAPIDAPI_KEY) return null;
+
+  // YouTube video ID ni ajratib olamiz
+  const match = videoUrl.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  if (!match) return null;
+  const videoId = match[1];
+
+  try {
+    // yt-api.p.rapidapi.com — video info va download URL larini qaytaradi
+    const res = await fetch(`https://yt-api.p.rapidapi.com/dl?id=${videoId}`, {
+      method: 'GET',
+      headers: {
+        'x-rapidapi-host': 'yt-api.p.rapidapi.com',
+        'x-rapidapi-key': RAPIDAPI_KEY,
+      },
+    });
+
+    if (!res.ok) {
+      console.warn('RapidAPI yt-api response not ok:', res.status);
+      return null;
+    }
+
+    const data = await res.json();
+    if (!data || data.status === 'ERROR') {
+      console.warn('RapidAPI yt-api returned error:', data?.message);
+      return null;
+    }
+
+    const formats: VideoFormat[] = [];
+    const seenQ = new Set<string>();
+
+    // adaptiveFormats — yuqori sifatli video-only formatlar
+    const adaptive: any[] = data.adaptiveFormats || [];
+    for (const fmt of adaptive) {
+      if (!fmt.url) continue;
+      const mimeType: string = fmt.mimeType || '';
+      if (!mimeType.startsWith('video/')) continue;
+
+      const height = fmt.height || parseInt(fmt.qualityLabel) || 0;
+      const quality = getQualityLabel(height);
+      if (!quality) continue;
+
+      const key = `${quality}_mp4`;
+      if (seenQ.has(key)) continue;
+      seenQ.add(key);
+
+      const size = parseInt(fmt.contentLength || '0') || 0;
+      formats.push({
+        quality,
+        resolution: fmt.qualityLabel || quality,
+        filesize: size,
+        filesizeFormatted: formatFilesize(size),
+        url: fmt.url,
+        ext: 'mp4',
+        vcodec: 'h264',
+        acodec: 'none', // adaptive = video-only, audio alohida
+        formatId: fmt.itag?.toString() || '',
+      });
+    }
+
+    // formats — video+audio combined formatlar
+    const combined: any[] = data.formats || [];
+    for (const fmt of combined) {
+      if (!fmt.url) continue;
+      const mimeType: string = fmt.mimeType || '';
+      if (!mimeType.startsWith('video/')) continue;
+
+      const height = fmt.height || 0;
+      const quality = getQualityLabel(height);
+      if (!quality) continue;
+
+      const key = `${quality}_mp4_combined`;
+      if (seenQ.has(key)) continue;
+      seenQ.add(key);
+
+      const size = parseInt(fmt.contentLength || '0') || 0;
+      formats.push({
+        quality,
+        resolution: fmt.qualityLabel || quality,
+        filesize: size,
+        filesizeFormatted: formatFilesize(size),
+        url: fmt.url,
+        ext: 'mp4',
+        vcodec: 'h264',
+        acodec: 'aac',
+        formatId: fmt.itag?.toString() || '',
+      });
+    }
+
+    if (formats.length === 0) return null;
+
+    const qualityOrder: Record<string, number> = {
+      '2160p': 8, '1440p': 7, '1080p': 6, '720p': 5,
+      '480p': 4, '360p': 3, '240p': 2, '144p': 1,
+    };
+    formats.sort((a, b) => (qualityOrder[b.quality] ?? 0) - (qualityOrder[a.quality] ?? 0));
+
+    // Davomiylik — soniyalarda
+    const durationSec = Math.round(parseInt(data.lengthSeconds || '0'));
+
+    return {
+      title: data.title || 'YouTube Video',
+      duration: durationSec,
+      durationFormatted: formatDuration(durationSec),
+      thumbnail: data.thumbnail?.thumbnails?.at(-1)?.url || data.thumbnail?.[0]?.url || '',
+      url: videoUrl,
+      platform: 'YOUTUBE',
+      formats,
+    };
+  } catch (err) {
+    console.warn('RapidAPI yt-api fetch error:', err);
+    return null;
+  }
+}
+// ──────────────────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
   try {
@@ -70,148 +280,62 @@ export async function POST(request: NextRequest) {
     const sanitizedUrl = url.trim();
     const platform = detectPlatform(sanitizedUrl);
 
-    const ytDlpPath = await ensureYtDlpBinary();
-    // android client — eng ko'p va eng yuqori sifatli formatlarni qaytaradi
-    const primaryFlags = await getExtraYtDlpFlags('android,tv_embedded,ios');
+    // ── 1. yt-dlp urinishi ───────────────────────────────────────────────
+    let videoInfo: VideoInfo | null = null;
+    let ytdlpError = '';
 
-    // MUHIM: -f flagini BERMANG — --dump-json bilan -f bersa faqat 1 ta format keladi.
-    // -f siz barcha mavjud formatlar ro'yxati (360p, 480p, 720p, 1080p...) keladi.
-    const cmd = `"${ytDlpPath}" ${primaryFlags} --dump-json "${sanitizedUrl}"`;
-    
-    let stdoutData = '';
     try {
-      const { stdout } = await execPromise(cmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
-      stdoutData = stdout;
-    } catch (execError: any) {
-      console.warn('android client failed, trying tv_embedded fallback:', execError.message);
-      const fallbackFlags = await getExtraYtDlpFlags('tv_embedded,web_creator,ios');
-      const retryCmd = `"${ytDlpPath}" ${fallbackFlags} --dump-json "${sanitizedUrl}"`;
+      const ytDlpPath = await ensureYtDlpBinary();
+      // android client — eng ko'p va eng yuqori sifatli formatlarni qaytaradi
+      const primaryFlags = await getExtraYtDlpFlags('android,tv_embedded,ios');
+      const cmd = `"${ytDlpPath}" ${primaryFlags} --dump-json "${sanitizedUrl}"`;
+
+      let stdoutData = '';
       try {
-        const { stdout } = await execPromise(retryCmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
+        const { stdout } = await execPromise(cmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
         stdoutData = stdout;
-      } catch (retryErr: any) {
-        console.warn('tv_embedded failed, trying web_safari fallback:', retryErr.message);
-        const basicFlags = await getExtraYtDlpFlags('web_safari,mweb,web');
-        const finalCmd = `"${ytDlpPath}" ${basicFlags} --dump-json "${sanitizedUrl}"`;
-        const { stdout } = await execPromise(finalCmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
-        stdoutData = stdout;
-      }
-    }
-
-    const output = JSON.parse(stdoutData);
-    if (!output) {
-      throw new Error('Video tahlilidan JSON ma\'lumot olinmadi');
-    }
-
-    const formats: VideoFormat[] = [];
-    const seenQualities = new Set<string>();
-
-    const rawFormats: any[] = output.formats || [];
-
-    // 1. Har bir format uchun quality label aniqlash
-    function getQualityLabel(fmt: any): string | null {
-      const height = fmt.height || 0;
-      if (height >= 2160) return '2160p';
-      if (height >= 1440) return '1440p';
-      if (height >= 1080) return '1080p';
-      if (height >= 720)  return '720p';
-      if (height >= 480)  return '480p';
-      if (height >= 360)  return '360p';
-      if (height >= 240)  return '240p';
-      if (height > 0)     return '144p';
-      return null; // Height yo'q — o'tkazib yuboramiz
-    }
-
-    // 2. Video formatlarini ajratib olish
-    //    - vcodec === 'none' => audio-only => o'tkazib yuboramiz
-    //    - acodec === 'none' => video-only (adaptive) => saqlаymiz, download vaqtida audio biriktiriladi
-    for (const fmt of rawFormats) {
-      if (!fmt.url) continue;
-      if (fmt.vcodec === 'none') continue; // Audio-only => skip
-
-      const quality = getQualityLabel(fmt);
-      if (!quality) continue; // Height aniqlanmagan => skip
-
-      // Har bir sifat darajasi uchun bitta eng yaxshi formatni saqlaymiz
-      // Ustunlik: audio bor formatlar > audio yo'q (adaptive) formatlar
-      const hasAudio = fmt.acodec && fmt.acodec !== 'none';
-      const key = `${quality}_${fmt.ext || 'mp4'}`;
-
-      if (seenQualities.has(key)) {
-        // Agar oldin audio-yoq format saqlangan bo'lsa va hozir audio bor bo'lsa — almashtir
-        const existingIdx = formats.findIndex(f => f.quality === quality && f.ext === (fmt.ext || 'mp4'));
-        if (existingIdx >= 0 && hasAudio && formats[existingIdx].acodec === 'none') {
-          const size = fmt.filesize || fmt.filesize_approx || 0;
-          formats[existingIdx] = {
-            quality,
-            resolution: fmt.resolution || (fmt.width && fmt.height ? `${fmt.width}x${fmt.height}` : quality),
-            filesize: size,
-            filesizeFormatted: formatFilesize(size),
-            url: fmt.url,
-            ext: fmt.ext || 'mp4',
-            vcodec: fmt.vcodec || 'h264',
-            acodec: fmt.acodec || 'aac',
-            formatId: fmt.format_id || '',
-          };
+      } catch (e1: any) {
+        console.warn('android client failed:', e1.message);
+        const f2 = await getExtraYtDlpFlags('tv_embedded,web_creator,ios');
+        try {
+          const { stdout } = await execPromise(
+            `"${ytDlpPath}" ${f2} --dump-json "${sanitizedUrl}"`,
+            { maxBuffer: 10 * 1024 * 1024, timeout: 60000 }
+          );
+          stdoutData = stdout;
+        } catch (e2: any) {
+          console.warn('tv_embedded failed:', e2.message);
+          // bu xatoni tashqariga chiqaramiz — RapidAPI fallback ishlatiladi
+          throw e2;
         }
-        continue;
       }
 
-      seenQualities.add(key);
-      const size = fmt.filesize || fmt.filesize_approx || 0;
-      formats.push({
-        quality,
-        resolution: fmt.resolution || (fmt.width && fmt.height ? `${fmt.width}x${fmt.height}` : quality),
-        filesize: size,
-        filesizeFormatted: formatFilesize(size),
-        url: fmt.url,
-        ext: fmt.ext || 'mp4',
-        vcodec: fmt.vcodec || 'h264',
-        acodec: fmt.acodec || 'aac',
-        formatId: fmt.format_id || '',
-      });
+      const output = JSON.parse(stdoutData);
+      videoInfo = parseYtdlpFormats(output, sanitizedUrl, platform);
+    } catch (err: any) {
+      ytdlpError = err.message || 'yt-dlp failed';
+      console.warn('yt-dlp completely failed, will try RapidAPI fallback. Error:', ytdlpError);
     }
 
-    // 3. Fallback: Agar hech narsa topilmasa, top-level output.url ni olamiz
-    if (formats.length === 0 && output.url) {
-      const height = output.height || 0;
-      const quality = height >= 720 ? `${height}p` : '360p';
-      formats.push({
-        quality,
-        resolution: output.resolution || `${output.width || '?'}x${height || '?'}`,
-        filesize: 0,
-        filesizeFormatted: 'Avto',
-        url: output.url,
-        ext: output.ext || 'mp4',
-        vcodec: output.vcodec || 'h264',
-        acodec: output.acodec || 'aac',
-        formatId: output.format_id || '',
-      });
+    // ── 2. RapidAPI fallback (faqat YouTube uchun) ───────────────────────
+    if (!videoInfo && platform === 'youtube') {
+      console.log('Trying RapidAPI fallback for YouTube...');
+      videoInfo = await fetchYouTubeViaRapidAPI(sanitizedUrl, platform);
     }
 
-    // Sifatlarni yuqoridan pastga saralash
-    const qualityOrder: Record<string, number> = {
-      '2160p': 8, '1440p': 7, '1080p': 6, '720p': 5,
-      '480p': 4, '360p': 3, '240p': 2, '144p': 1
-    };
-    formats.sort((a, b) => (qualityOrder[b.quality] ?? 0) - (qualityOrder[a.quality] ?? 0));
-
-    const videoInfo: VideoInfo = {
-      title: output.title || output.fulltitle || 'Untitled Video',
-      duration: output.duration || 0,
-      durationFormatted: formatDuration(output.duration || 0),
-      thumbnail: output.thumbnail || output.thumbnails?.[0]?.url || '',
-      url: sanitizedUrl,
-      platform: platform.toUpperCase(),
-      formats,
-    };
+    if (!videoInfo) {
+      return NextResponse.json(
+        { error: `Video tahlil qilib bo'lmadi. Iltimos keyinroq urinib ko'ring yoki boshqa URL ishlating.` },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({ data: videoInfo });
 
   } catch (error: any) {
-    console.error('Audio-Video merger extraction error:', error);
+    console.error('info route error:', error);
     return NextResponse.json(
-      { error: `Video tahlil qilib bo'lmadi: ${error.message || 'Dvijok ishga tushmadi'}` },
+      { error: `Video tahlil qilib bo'lmadi: ${error.message || 'Noma\'lum xato'}` },
       { status: 500 }
     );
   }
