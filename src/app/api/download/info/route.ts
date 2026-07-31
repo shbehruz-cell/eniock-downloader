@@ -67,43 +67,31 @@ function getQualityLabel(height: number): string | null {
 }
 
 function parseYtdlpFormats(output: any, sanitizedUrl: string, platform: string): VideoInfo {
-  const formats: VideoFormat[] = [];
-  const seenQualities = new Set<string>();
   const rawFormats: any[] = output.formats || [];
+
+  // quality -> eng yaxshi format (audio bor bo'lsa ustun)
+  const bestByQuality = new Map<string, VideoFormat>();
 
   for (const fmt of rawFormats) {
     if (!fmt.url) continue;
-    if (fmt.vcodec === 'none') continue;
+    // Audio-only formatlarni o'tkazamiz
+    if (fmt.vcodec === 'none' || fmt.vcodec === null) continue;
 
-    const height = fmt.height || 0;
+    // height aniqlaymiz (format_note dan ham olishga harakat qilamiz)
+    let height = fmt.height || 0;
+    if (height === 0 && fmt.format_note) {
+      const m2 = fmt.format_note.match(/(\d+)p/);
+      if (m2) height = parseInt(m2[1]);
+    }
+
     const quality = getQualityLabel(height);
     if (!quality) continue;
 
     const hasAudio = fmt.acodec && fmt.acodec !== 'none';
-    const key = `${quality}_${fmt.ext || 'mp4'}`;
-
-    if (seenQualities.has(key)) {
-      const existingIdx = formats.findIndex(f => f.quality === quality && f.ext === (fmt.ext || 'mp4'));
-      if (existingIdx >= 0 && hasAudio && formats[existingIdx].acodec === 'none') {
-        const size = fmt.filesize || fmt.filesize_approx || 0;
-        formats[existingIdx] = {
-          quality,
-          resolution: fmt.resolution || (fmt.width && fmt.height ? `${fmt.width}x${fmt.height}` : quality),
-          filesize: size,
-          filesizeFormatted: formatFilesize(size),
-          url: fmt.url,
-          ext: fmt.ext || 'mp4',
-          vcodec: fmt.vcodec || 'h264',
-          acodec: fmt.acodec || 'aac',
-          formatId: fmt.format_id || '',
-        };
-      }
-      continue;
-    }
-
-    seenQualities.add(key);
+    const existing = bestByQuality.get(quality);
     const size = fmt.filesize || fmt.filesize_approx || 0;
-    formats.push({
+
+    const entry: VideoFormat = {
       quality,
       resolution: fmt.resolution || (fmt.width && fmt.height ? `${fmt.width}x${fmt.height}` : quality),
       filesize: size,
@@ -111,11 +99,29 @@ function parseYtdlpFormats(output: any, sanitizedUrl: string, platform: string):
       url: fmt.url,
       ext: fmt.ext || 'mp4',
       vcodec: fmt.vcodec || 'h264',
-      acodec: fmt.acodec || 'aac',
+      acodec: fmt.acodec || 'none',
       formatId: fmt.format_id || '',
-    });
+    };
+
+    if (!existing) {
+      bestByQuality.set(quality, entry);
+    } else if (!existing.acodec || existing.acodec === 'none') {
+      if (hasAudio) {
+        // Audio bor versiyaga almashtiramiz
+        bestByQuality.set(quality, entry);
+      }
+    }
   }
 
+  const qualityOrder: Record<string, number> = {
+    '2160p': 8, '1440p': 7, '1080p': 6, '720p': 5,
+    '480p': 4, '360p': 3, '240p': 2, '144p': 1,
+  };
+
+  let formats = Array.from(bestByQuality.values())
+    .sort((a, b) => (qualityOrder[b.quality] ?? 0) - (qualityOrder[a.quality] ?? 0));
+
+  // Fallback: hech narsa topilmasa
   if (formats.length === 0 && output.url) {
     const h = output.height || 0;
     const q = getQualityLabel(h) || '360p';
@@ -132,17 +138,11 @@ function parseYtdlpFormats(output: any, sanitizedUrl: string, platform: string):
     });
   }
 
-  const qualityOrder: Record<string, number> = {
-    '2160p': 8, '1440p': 7, '1080p': 6, '720p': 5,
-    '480p': 4, '360p': 3, '240p': 2, '144p': 1,
-  };
-  formats.sort((a, b) => (qualityOrder[b.quality] ?? 0) - (qualityOrder[a.quality] ?? 0));
-
   return {
     title: output.title || output.fulltitle || 'Untitled Video',
     duration: output.duration || 0,
     durationFormatted: formatDuration(output.duration || 0),
-    thumbnail: output.thumbnail || output.thumbnails?.[0]?.url || '',
+    thumbnail: output.thumbnail || output.thumbnails?.[output.thumbnails.length - 1]?.url || '',
     url: sanitizedUrl,
     platform: platform.toUpperCase(),
     formats,

@@ -612,34 +612,67 @@ export async function POST(request: NextRequest) {
             const output = JSON.parse(stdoutData);
             if (output) {
               title = output.title || output.fulltitle || 'Video';
-              thumbnail = output.thumbnail || '';
+              thumbnail = output.thumbnail || output.thumbnails?.[output.thumbnails.length - 1]?.url || '';
               const duration = output.duration || 0;
               const h = Math.floor(duration / 3600);
               const m = Math.floor((duration % 3600) / 60);
               const s = Math.floor(duration % 60);
               durationFormatted = h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
 
-              const rawFormats = output.formats || [];
-              const seenQualities = new Set<string>();
-              for (const fmt of rawFormats) {
-                if (!fmt.url || fmt.vcodec === 'none') continue;
-                const height = fmt.height || 0;
-                const quality = getQualityLabel(height) || '720p';
+              const qualityOrder: Record<string, number> = {
+                '2160p': 8, '1440p': 7, '1080p': 6, '720p': 5,
+                '480p': 4, '360p': 3, '240p': 2, '144p': 1,
+              };
 
-                const key = `${quality}_${fmt.ext || 'mp4'}`;
-                if (seenQualities.has(key)) continue;
-                seenQualities.add(key);
-
-                formats.push({
-                  quality,
-                  ext: fmt.ext || 'mp4',
-                  formatId: fmt.format_id || '',
-                  url: fmt.url
-                });
+              function getQL(height: number): string | null {
+                if (height >= 2160) return '2160p';
+                if (height >= 1440) return '1440p';
+                if (height >= 1080) return '1080p';
+                if (height >= 720)  return '720p';
+                if (height >= 480)  return '480p';
+                if (height >= 360)  return '360p';
+                if (height >= 240)  return '240p';
+                if (height > 0)     return '144p';
+                return null;
               }
 
+              const rawFormats = output.formats || [];
+              // quality -> best format (audio ustun)
+              const bestByQuality = new Map<string, any>();
+
+              for (const fmt of rawFormats) {
+                if (!fmt.url) continue;
+                // Audio-only formatlarni o'tkazib yuboramiz
+                if (fmt.vcodec === 'none' || fmt.vcodec === null) continue;
+
+                // height qiymati bo'lmasa, format_note yoki qualityLabel dan olamiz
+                let height = fmt.height || 0;
+                if (height === 0 && fmt.format_note) {
+                  const m2 = fmt.format_note.match(/(\d+)p/);
+                  if (m2) height = parseInt(m2[1]);
+                }
+
+                const quality = getQL(height);
+                if (!quality) continue;
+
+                const hasAudio = fmt.acodec && fmt.acodec !== 'none';
+                const existing = bestByQuality.get(quality);
+
+                if (!existing) {
+                  bestByQuality.set(quality, { quality, ext: fmt.ext || 'mp4', formatId: fmt.format_id || '', url: fmt.url, hasAudio });
+                } else if (!existing.hasAudio && hasAudio) {
+                  // Audio bor versiyasiga almashtir
+                  bestByQuality.set(quality, { quality, ext: fmt.ext || 'mp4', formatId: fmt.format_id || '', url: fmt.url, hasAudio });
+                }
+              }
+
+              formats = Array.from(bestByQuality.values())
+                .sort((a, b) => (qualityOrder[b.quality] ?? 0) - (qualityOrder[a.quality] ?? 0))
+                .map(f => ({ quality: f.quality, ext: f.ext, formatId: f.formatId, url: f.url }));
+
+              // Fallback: agar hech narsa topilmasa
               if (formats.length === 0 && output.url) {
-                formats.push({ quality: 'Standart', ext: 'mp4', formatId: '', url: output.url });
+                formats.push({ quality: 'Standart', ext: output.ext || 'mp4', formatId: output.format_id || '', url: output.url });
               }
               success = true;
             }
