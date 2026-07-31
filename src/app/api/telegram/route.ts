@@ -344,10 +344,40 @@ export async function POST(request: NextRequest) {
       }
 
       if (data.startsWith('pay_stars_')) {
-        await sendTelegramMessage(telegramApi, chatId, 
-          `🌟 **Telegram Stars orqali to'lov qilish:**\n\n` +
-          `Tez kunda Stars orqali to'lovlar botda faollashtiriladi. Hozircha karta orqali to'lov usulidan foydalanib turing.`
-        );
+        const plan = data.split('_')[2];
+        const siteConfigSnap = await getDoc(doc(db, 'settings', 'site_config'));
+        const config = siteConfigSnap.exists() ? siteConfigSnap.data() : {};
+        const price = plan === 'max' ? (config.maxPrice || '70') : (config.proPrice || '20');
+
+        // Telegram Stars to'lovi uchun invoice yuboramiz
+        const invoiceTitle = plan === 'max' ? "MAX Tarifi (Stars)" : "PRO Tarifi (Stars)";
+        const invoiceDesc = plan === 'max' 
+          ? "Maksimal tezlikda yuklash, 4K sifat, cheksiz kunlik yuklashlar" 
+          : "Maksimal 720p sifat, kuniga 10 tagacha yuklash";
+
+        try {
+          const invoiceRes = await fetch(`${telegramApi}/sendInvoice`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              title: invoiceTitle,
+              description: invoiceDesc,
+              payload: `stars_payment_${plan}`,
+              provider_token: "", // Telegram Stars uchun bo'sh qoldiriladi
+              currency: "XTR", // Telegram Stars valyuta kodi
+              prices: [
+                { label: invoiceTitle, amount: parseInt(price) } // Stars miqdori
+              ]
+            })
+          });
+          const invoiceData = await invoiceRes.json();
+          if (!invoiceData.ok) {
+            throw new Error(invoiceData.description || "Invoice yuborib bo'lmadi");
+          }
+        } catch (err: any) {
+          await sendTelegramMessage(telegramApi, chatId, `❌ Stars to'lov oynasini yaratib bo'lmadi: ${err.message}. Iltimos keyinroq urinib ko'ring.`);
+        }
         return NextResponse.json({ ok: true });
       }
 
@@ -392,6 +422,21 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // 1.5 Handle PreCheckout Query (Stars to'lovi uchun Telegram so'rovi)
+    if (update.pre_checkout_query) {
+      const pqId = update.pre_checkout_query.id;
+      // To'lovni tasdiqlaymiz
+      await fetch(`${telegramApi}/answerPreCheckoutQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pre_checkout_query_id: pqId,
+          ok: true
+        })
+      });
+      return NextResponse.json({ ok: true });
+    }
+
     // 2. Handle incoming Message
     if (update.message) {
       const message = update.message;
@@ -414,7 +459,31 @@ export async function POST(request: NextRequest) {
       }
       const userDoc = userSnap.data()!;
 
-      // A. /start buyrug'i
+      // A. Handle Successful Payment (Telegram Stars to'lovi muvaffaqiyatli o'tganda)
+      if (message.successful_payment) {
+        const payload: string = message.successful_payment.invoice_payload || '';
+        const plan = payload.replace('stars_payment_', '') as 'pro' | 'max';
+
+        // Foydalanuvchi tarifini avtomatik faollashtiramiz
+        await updateDoc(userRef, {
+          plan: plan,
+          starsPayments: arrayUnion({
+            id: message.successful_payment.telegram_payment_charge_id,
+            amount: message.successful_payment.total_amount,
+            plan: plan,
+            date: new Date().toISOString()
+          })
+        });
+
+        // Muvaffaqiyatli to'lov xabari
+        await sendTelegramMessage(telegramApi, chatId, 
+          `🎉 **Tabriklaymiz! To'lov muvaffaqiyatli amalga oshirildi!**\n\n` +
+          `Sizning **${plan.toUpperCase()}** tarifingiz avtomatik ravishda faollashtirildi. Endi siz barcha cheklovlardan ozodsiz! 🚀`
+        );
+        return NextResponse.json({ ok: true });
+      }
+
+      // A2. /start buyrug'i
       if (message.text === '/start') {
         await sendTelegramMessage(telegramApi, chatId, 
           `👋 **Salom, ${tgUser.first_name || 'Foydalanuvchi'}!**\n\n` +
