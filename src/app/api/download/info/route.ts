@@ -71,7 +71,8 @@ export async function POST(request: NextRequest) {
     const platform = detectPlatform(sanitizedUrl);
 
     const ytDlpPath = await ensureYtDlpBinary();
-    const primaryFlags = await getExtraYtDlpFlags('tv_embedded,web_creator,ios');
+    // android client — eng ko'p va eng yuqori sifatli formatlarni qaytaradi
+    const primaryFlags = await getExtraYtDlpFlags('android,tv_embedded,ios');
 
     // MUHIM: -f flagini BERMANG — --dump-json bilan -f bersa faqat 1 ta format keladi.
     // -f siz barcha mavjud formatlar ro'yxati (360p, 480p, 720p, 1080p...) keladi.
@@ -82,15 +83,15 @@ export async function POST(request: NextRequest) {
       const { stdout } = await execPromise(cmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
       stdoutData = stdout;
     } catch (execError: any) {
-      console.warn('Primary client failed, trying ios,android fallback:', execError.message);
-      const fallbackFlags = await getExtraYtDlpFlags('ios,android,tv_embedded');
+      console.warn('android client failed, trying tv_embedded fallback:', execError.message);
+      const fallbackFlags = await getExtraYtDlpFlags('tv_embedded,web_creator,ios');
       const retryCmd = `"${ytDlpPath}" ${fallbackFlags} --dump-json "${sanitizedUrl}"`;
       try {
         const { stdout } = await execPromise(retryCmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
         stdoutData = stdout;
       } catch (retryErr: any) {
-        console.warn('Secondary client failed, trying web fallback:', retryErr.message);
-        const basicFlags = await getExtraYtDlpFlags('web,mweb');
+        console.warn('tv_embedded failed, trying web_safari fallback:', retryErr.message);
+        const basicFlags = await getExtraYtDlpFlags('web_safari,mweb,web');
         const finalCmd = `"${ytDlpPath}" ${basicFlags} --dump-json "${sanitizedUrl}"`;
         const { stdout } = await execPromise(finalCmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
         stdoutData = stdout;
