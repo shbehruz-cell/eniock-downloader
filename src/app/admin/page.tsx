@@ -35,8 +35,10 @@ export default function AdminPage() {
     cardHolder: 'ADMIN NAME',
     paymentInstructions: 'Ushbu kartaga tegishli pulni o\'tkazib, chekni rasm shaklida yuklang.',
     proPrice: '20',
+    proStarsPrice: '200',
     proDescription: 'Max quality: 720p • 10 URLs per day',
     maxPrice: '70',
+    maxStarsPrice: '700',
     maxDescription: 'All qualities up to 4K • Unlimited downloads',
     telegramBotToken: '',
   });
@@ -781,15 +783,27 @@ export default function AdminPage() {
                       <div className="border border-gray-100 rounded-2xl p-4 bg-gray-50/50">
                         <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">PRO Plan Sozlamalari</p>
                         <div className="flex flex-col gap-3">
-                          <div>
-                            <label className="block text-[10px] text-gray-400 font-semibold mb-1">Narxi ($)</label>
-                            <input 
-                              type="text" 
-                              value={settings.proPrice}
-                              onChange={(e) => setSettings({ ...settings, proPrice: e.target.value })}
-                              className="w-full h-9 bg-white border border-gray-200 rounded-lg px-3 outline-none focus:border-[#ff3b30] text-sm font-semibold text-gray-900"
-                              required
-                            />
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[10px] text-gray-400 font-semibold mb-1">Narxi ($)</label>
+                              <input 
+                                type="text" 
+                                value={settings.proPrice}
+                                onChange={(e) => setSettings({ ...settings, proPrice: e.target.value })}
+                                className="w-full h-9 bg-white border border-gray-200 rounded-lg px-3 outline-none focus:border-[#ff3b30] text-sm font-semibold text-gray-900"
+                                required
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-gray-400 font-semibold mb-1">Stars narxi (🌟)</label>
+                              <input 
+                                type="number" 
+                                value={settings.proStarsPrice || ''}
+                                onChange={(e) => setSettings({ ...settings, proStarsPrice: e.target.value })}
+                                className="w-full h-9 bg-white border border-gray-200 rounded-lg px-3 outline-none focus:border-[#ff3b30] text-sm font-semibold text-gray-900"
+                                required
+                              />
+                            </div>
                           </div>
                           <div>
                             <label className="block text-[10px] text-gray-400 font-semibold mb-1">Tavsifi (Qisqa)</label>
@@ -808,15 +822,27 @@ export default function AdminPage() {
                       <div className="border border-gray-100 rounded-2xl p-4 bg-gray-50/50">
                         <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">MAX Plan Sozlamalari</p>
                         <div className="flex flex-col gap-3">
-                          <div>
-                            <label className="block text-[10px] text-gray-400 font-semibold mb-1">Narxi ($)</label>
-                            <input 
-                              type="text" 
-                              value={settings.maxPrice}
-                              onChange={(e) => setSettings({ ...settings, maxPrice: e.target.value })}
-                              className="w-full h-9 bg-white border border-gray-200 rounded-lg px-3 outline-none focus:border-[#ff3b30] text-sm font-semibold text-gray-900"
-                              required
-                            />
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[10px] text-gray-400 font-semibold mb-1">Narxi ($)</label>
+                              <input 
+                                type="text" 
+                                value={settings.maxPrice}
+                                onChange={(e) => setSettings({ ...settings, maxPrice: e.target.value })}
+                                className="w-full h-9 bg-white border border-gray-200 rounded-lg px-3 outline-none focus:border-[#ff3b30] text-sm font-semibold text-gray-900"
+                                required
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-gray-400 font-semibold mb-1">Stars narxi (🌟)</label>
+                              <input 
+                                type="number" 
+                                value={settings.maxStarsPrice || ''}
+                                onChange={(e) => setSettings({ ...settings, maxStarsPrice: e.target.value })}
+                                className="w-full h-9 bg-white border border-gray-200 rounded-lg px-3 outline-none focus:border-[#ff3b30] text-sm font-semibold text-gray-900"
+                                required
+                              />
+                            </div>
                           </div>
                           <div>
                             <label className="block text-[10px] text-gray-400 font-semibold mb-1">Tavsifi (Qisqa)</label>

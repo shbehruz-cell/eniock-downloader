@@ -72,11 +72,11 @@ function getQualityLabel(height: number): string | null {
   if (height >= 2160) return '2160p';
   if (height >= 1440) return '1440p';
   if (height >= 1080) return '1080p';
-  if (height >= 720)  return '720p';
-  if (height >= 480)  return '480p';
-  if (height >= 360)  return '360p';
-  if (height >= 240)  return '240p';
-  if (height > 0)     return '144p';
+  if (height >= 720) return '720p';
+  if (height >= 480) return '480p';
+  if (height >= 360) return '360p';
+  if (height >= 240) return '240p';
+  if (height > 0) return '144p';
   return null;
 }
 
@@ -241,7 +241,7 @@ export async function POST(request: NextRequest) {
         const requestedRank = QUALITY_HIERARCHY[format.quality] || 3;
 
         if (requestedRank > maxAllowedRank) {
-          await sendTelegramMessage(telegramApi, chatId, 
+          await sendTelegramMessage(telegramApi, chatId,
             `⚠️ **Tarif cheklovi!**\n\n` +
             `Siz tanlagan sifat: **${format.quality}**.\n` +
             `Sizning hozirgi tarifingiz: **${userPlan.toUpperCase()}** (Maksimal ruxsat etilgan sifat: **${limits.maxQuality}**).\n\n` +
@@ -256,7 +256,7 @@ export async function POST(request: NextRequest) {
         const currentDownloads = isNewDay ? 0 : (userDoc.dailyDownloads || 0);
 
         if (currentDownloads >= limits.dailyUrls) {
-          await sendTelegramMessage(telegramApi, chatId, 
+          await sendTelegramMessage(telegramApi, chatId,
             `⚠️ **Kunlik limit tugadi!**\n\n` +
             `Siz bugun limitda belgilangan barcha videolarni yuklab bo'ldingiz.\n` +
             `Kunlik limitingiz: **${limits.dailyUrls} ta**.\n\n` +
@@ -288,7 +288,7 @@ export async function POST(request: NextRequest) {
         // To'g'ridan-to'g'ri download endpoint havolasi orqali telegramga video yuboramiz
         const cleanTitle = (tempVideo.title || 'video').replace(/[^a-zA-Z0-9]/g, '_');
         const filename = `${cleanTitle}_${format.quality}.${format.ext}`;
-        
+
         const videoDownloadProxyUrl = `${webUrl}/api/download/file?url=${encodeURIComponent(format.url)}&filename=${encodeURIComponent(filename)}&formatId=${format.formatId || ''}&videoUrl=${encodeURIComponent(tempVideo.url)}`;
 
         // Telegram orqali videoni yuborish
@@ -307,7 +307,7 @@ export async function POST(request: NextRequest) {
         if (!videoResult.ok) {
           console.error('Failed to send video directly via sendVideo:', videoResult);
           // Agar direct sendVideo xato bersa, download linkini yuboramiz
-          await sendTelegramMessage(telegramApi, chatId, 
+          await sendTelegramMessage(telegramApi, chatId,
             `❌ Telegram orqali videoni yuborib bo'lmadi.\n\n` +
             `Siz uni brauzer orqali to'g'ridan-to'g'ri yuklab olishingiz mumkin:\n` +
             `👉 [Videoni yuklab olish](${videoDownloadProxyUrl})`
@@ -332,7 +332,7 @@ export async function POST(request: NextRequest) {
         const config = siteConfigSnap.exists() ? siteConfigSnap.data() : {};
         const price = plan === 'max' ? (config.maxPrice || '70') : (config.proPrice || '20');
 
-        await sendTelegramMessage(telegramApi, chatId, 
+        await sendTelegramMessage(telegramApi, chatId,
           `💳 **Admin Karta Raqami:**\n` +
           `💰 Miqdor: **$${price}**\n` +
           `🔢 Karta: \`${config.cardNumber || '9860 0000 0000 0000'}\`\n` +
@@ -347,7 +347,15 @@ export async function POST(request: NextRequest) {
         const plan = data.split('_')[2];
         const siteConfigSnap = await getDoc(doc(db, 'settings', 'site_config'));
         const config = siteConfigSnap.exists() ? siteConfigSnap.data() : {};
-        const price = plan === 'max' ? (config.maxPrice || '70') : (config.proPrice || '20');
+        
+        // Stars narxini Firestore sozlamasidan olamiz.
+        // Agar kiritilmagan bo'lsa, USD narxini 10 ga ko'paytirib hisoblaymiz (default: $20 = 200 Stars, $70 = 700 Stars).
+        let starsAmount = 0;
+        if (plan === 'max') {
+          starsAmount = parseInt(config.maxStarsPrice || (parseInt(config.maxPrice || '70') * 10).toString());
+        } else {
+          starsAmount = parseInt(config.proStarsPrice || (parseInt(config.proPrice || '20') * 10).toString());
+        }
 
         // Telegram Stars to'lovi uchun invoice yuboramiz
         const invoiceTitle = plan === 'max' ? "MAX Tarifi (Stars)" : "PRO Tarifi (Stars)";
@@ -367,7 +375,7 @@ export async function POST(request: NextRequest) {
               provider_token: "", // Telegram Stars uchun bo'sh qoldiriladi
               currency: "XTR", // Telegram Stars valyuta kodi
               prices: [
-                { label: invoiceTitle, amount: parseInt(price) } // Stars miqdori
+                { label: invoiceTitle, amount: starsAmount } // Stars miqdori
               ]
             })
           });
@@ -476,7 +484,7 @@ export async function POST(request: NextRequest) {
         });
 
         // Muvaffaqiyatli to'lov xabari
-        await sendTelegramMessage(telegramApi, chatId, 
+        await sendTelegramMessage(telegramApi, chatId,
           `🎉 **Tabriklaymiz! To'lov muvaffaqiyatli amalga oshirildi!**\n\n` +
           `Sizning **${plan.toUpperCase()}** tarifingiz avtomatik ravishda faollashtirildi. Endi siz barcha cheklovlardan ozodsiz! 🚀`
         );
@@ -485,7 +493,7 @@ export async function POST(request: NextRequest) {
 
       // A2. /start buyrug'i
       if (message.text === '/start') {
-        await sendTelegramMessage(telegramApi, chatId, 
+        await sendTelegramMessage(telegramApi, chatId,
           `👋 **Salom, ${tgUser.first_name || 'Foydalanuvchi'}!**\n\n` +
           `Men **Eniock Downloader** telegram botiman. Menga istalgan ijtimoiy tarmoq (YouTube, Instagram, TikTok va b.) video havolasini yuboring va men uni sizga yuklab beraman! 🚀\n\n` +
           `Tarifingizni yangilash uchun /upgrade buyrug'ini bosing.`
@@ -507,7 +515,7 @@ export async function POST(request: NextRequest) {
         }
 
         const waitMsgId = await sendTelegramMessage(telegramApi, chatId, "To'lov chek fayli yuklanmoqda... ⏳");
-        
+
         try {
           const fileId = message.photo[message.photo.length - 1].file_id;
           const fileRes = await fetch(`${telegramApi}/getFile?file_id=${fileId}`);
@@ -553,11 +561,11 @@ export async function POST(request: NextRequest) {
           new URL(text);
           isUrl = true;
         }
-      } catch (e) {}
+      } catch (e) { }
 
       if (isUrl) {
         const waitMessageId = await sendTelegramMessage(telegramApi, chatId, "Video tahlil qilinmoqda, iltimos kuting... ⏳");
-        
+
         try {
           const platform = detectPlatform(text);
           let title = 'Video';
@@ -589,7 +597,7 @@ export async function POST(request: NextRequest) {
             const ytDlpPath = await ensureYtDlpBinary();
             const primaryFlags = await getExtraYtDlpFlags('android,tv_embedded,ios');
             const cmd = `"${ytDlpPath}" ${primaryFlags} --dump-json "${text}"`;
-            
+
             let stdoutData = '';
             try {
               const { stdout } = await execPromise(cmd, { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
@@ -672,9 +680,9 @@ export async function POST(request: NextRequest) {
                 chat_id: chatId,
                 photo: thumbnail,
                 caption: `🎬 **Sarlavha:** ${title}\n` +
-                         `⏱ **Davomiyligi:** ${durationFormatted}\n` +
-                         `📱 **Platforma:** ${platform.toUpperCase()}\n\n` +
-                         `Yuklab olish uchun pastdagi sifat tugmalaridan birini tanlang:`,
+                  `⏱ **Davomiyligi:** ${durationFormatted}\n` +
+                  `📱 **Platforma:** ${platform.toUpperCase()}\n\n` +
+                  `Yuklab olish uchun pastdagi sifat tugmalaridan birini tanlang:`,
                 parse_mode: 'Markdown',
                 reply_markup: {
                   inline_keyboard: inlineKeyboard
@@ -685,7 +693,7 @@ export async function POST(request: NextRequest) {
             if (photoData.ok) return NextResponse.json({ ok: true });
           }
 
-          await sendTelegramMessageWithKeyboard(telegramApi, chatId, 
+          await sendTelegramMessageWithKeyboard(telegramApi, chatId,
             `🎬 **Sarlavha:** ${title}\n` +
             `⏱ **Davomiyligi:** ${durationFormatted}\n` +
             `📱 **Platforma:** ${platform.toUpperCase()}\n\n` +
@@ -790,8 +798,8 @@ async function sendUpgradeInfo(api: string, chatId: number, plan: 'pro' | 'max')
 
   const name = plan === 'max' ? 'MAX' : 'PRO';
   const price = plan === 'max' ? (config.maxPrice || '70') : (config.proPrice || '20');
-  const desc = plan === 'max' 
-    ? (config.maxDescription || 'All qualities up to 4K • Unlimited downloads') 
+  const desc = plan === 'max'
+    ? (config.maxDescription || 'All qualities up to 4K • Unlimited downloads')
     : (config.proDescription || 'Max quality: 720p • 10 URLs per day');
 
   await sendTelegramMessageWithKeyboard(api, chatId,
